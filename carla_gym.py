@@ -43,18 +43,17 @@ class Env(object):
 		self.world.camera_sensor.listen(lambda img: self.world.getCameraImage(img))
 	
 	def applyReward(self):
-		self.done = False
+		#se houve colisão, negativa em X pontos e termina
+		if self.world.colission_history > 0:
+			self.reward = self.reward - 10
+			self.done = True
+			print("ApplyReward - DONE !")
+			return
 		#se esta perto do objetivo, perde menos pontos
 		self.reward = self.reward - (self.world.destiny_dist()/10000) #possivel problema: ele pode querer subir em calçadas ou colidir a chegar no objetivo
 
 		self.reward = self.reward + (self.world.velocAtual()/360)
-
-		#se houve colisão, negativa em X pontos e termina
-		'''
-		if(collision_sensor != 0):
-			self.reward = self.reward - 1000
-			self.done = True
-		'''
+	
 
 	def step(self, action):
 		self.info = self.applyAction(action)
@@ -99,6 +98,7 @@ class World(object):
 		self.camera_sensor = None
 		self.destiny = carla.Location(x=9.9, y=0.3, z=20.3)
 		#self.restart()
+		self.colission_history = 0
 
 	def spawnPlayer(self):
 		#Cria um audi tt no ponto primeiro waypoint dos spawns
@@ -117,13 +117,17 @@ class World(object):
 		self.destroy()
 		self.spawnPlayer()
 		self.config_camera()
-		#self.collision_sensor()
+		self.config_collision_sensor()
 
-	def collision_sensor(self):
-		bp = world.get_blueprint_library().find('sensor.other.collision')
-		self.collision_sensor = self.world.spawn_actor(bp, carla.Transform(), attach_to=self.player)
-		
-		collision_sensor.get_collision_history()
+	def config_collision_sensor(self):
+		bp = self.world.get_blueprint_library().find('sensor.other.collision')
+		self.collision_sensor = self.world.spawn_actor(bp, carla.Transform(carla.Location(x=2.0, z=1.0)), attach_to=self.player)	
+		self.collision_sensor.listen(lambda event: self.on_collision(event))
+
+	def on_collision(self, event):
+		self.colission_history += 1
+		print("Mais uma colisão...")
+		#self.done = True #pelo fato de ser uma função assíncrona, pode ser que dê problema...
 
 	def config_camera(self):
 		camera_bp = self.world.get_blueprint_library().find('sensor.camera.rgb')
@@ -140,7 +144,7 @@ class World(object):
 	def destroy(self):
 		actors = [
 			self.camera_sensor,
-			#self.collision_sensor.sensor,
+			self.collision_sensor,
 			#self.lane_invasion_sensor.sensor,
 			#self.gnss_sensor.sensor,
 			self.player]
@@ -229,26 +233,3 @@ def main():
 
 if __name__ == '__main__':
 	main()
-
-
-//TODO: implementar o sensor de colisao
-class CollisionSensor(object):
-    def __init__(self, spawnPlayer):
-        self.history = []
-        # We need to pass the lambda a weak reference to self to avoid circular
-        # reference.
-        weak_self = weakref.ref(self)
-        self.sensor.listen(lambda event: CollisionSensor._on_collision(weak_self, event))
-
-    def get_collision_history(self):
-        history = collections.defaultdict(int)
-        for frame, intensity in self.history:
-            history[frame] += intensity
-        return history
-
-    @staticmethod
-    def _on_collision(weak_self, event):
-        self = weak_self()
-        if not self:
-            return
-        actor_type = get_actor_display_name(event.other_actor)
