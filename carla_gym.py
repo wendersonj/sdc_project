@@ -40,14 +40,17 @@ class Env(object):
 		self.done = False
 		self.world.restart()
 		self.player = self.world.player
-		self.world.camera_sensor.listen(lambda img: self.world.getCameraImage(img))
+		self.world.camera_sensor.listen(lambda img: self.world.getCameraImage(img, self))
+		print("Ator resetado...")
+
+		#time.sleep(1)
 	
 	def applyReward(self):
 		#se houve colisão, negativa em X pontos e termina
 		if self.world.colission_history > 0:
 			self.reward = self.reward - 10
 			self.done = True
-			print("ApplyReward - DONE !")
+			#print("ApplyReward - DONE !")
 			return
 		#se esta perto do objetivo, perde menos pontos
 		self.reward = self.reward - (self.world.destiny_dist()/10000) #possivel problema: ele pode querer subir em calçadas ou colidir a chegar no objetivo
@@ -56,7 +59,9 @@ class Env(object):
 	
 
 	def step(self, action):
+				
 		self.info = self.applyAction(action)
+		
 		#self.observation = getObservation(self.world.getObservation())
 		self.applyReward()
 
@@ -66,7 +71,7 @@ class Env(object):
 		speed_limit = 10
 		if self.world.velocAtual() >= speed_limit:
 			throttle=0.0
-			print("Acima do limite de velocidade...")
+			print("\nAcima do limite de velocidade de", speed_limit, "km/h...")
 		else:
 			throttle=0.5
 		actions = (
@@ -81,11 +86,9 @@ class Env(object):
 				(throttle, 0.5, True) #ré-esquerda
 				) #7 acoes
 
-		print("acao: ", actions[action])
+		print("\tAção: ", actions[action])
 
 		self.player.apply_control(carla.VehicleControl(actions[action][0], actions[action][1], reverse=actions[action][2]))
-		#self.player.apply_control(carla.VehicleControl(actions[0][0], actions[0][1]))
-		#time.sleep(0.5)
 		return None
 
 
@@ -109,7 +112,7 @@ class World(object):
 		# Spawn the player.
 		spawn_point = (self.world.get_map().get_spawn_points())[0]
 		self.player =  self.world.try_spawn_actor(blueprint, spawn_point)
-		time.sleep(2)
+		time.sleep(2) # para nao comecar as ações sem ter iniciado adequadamente
 
 	def restart(self):
 		# Set up the sensors.
@@ -118,7 +121,8 @@ class World(object):
 		self.spawnPlayer()
 		self.config_camera()
 		self.config_collision_sensor()
-
+		print("Iniciando componentes do ator...")
+		
 	def config_collision_sensor(self):
 		bp = self.world.get_blueprint_library().find('sensor.other.collision')
 		self.collision_sensor = self.world.spawn_actor(bp, carla.Transform(carla.Location(x=2.0, z=1.0)), attach_to=self.player)	
@@ -126,7 +130,7 @@ class World(object):
 
 	def on_collision(self, event):
 		self.colission_history += 1
-		print("Mais uma colisão...")
+		print("\tMais uma colisão...")
 		#self.done = True #pelo fato de ser uma função assíncrona, pode ser que dê problema...
 
 	def config_camera(self):
@@ -137,11 +141,13 @@ class World(object):
 		camera_bp.set_attribute('sensor_tick', '0.02') # Captura uma imagem a cada 50hz = 0.02
 		camera_bp.set_attribute('fov', '110') # angulo horizontal de 110graus
 		self.camera_sensor = self.world.spawn_actor(camera_bp, camera_transform, attach_to=self.player)
+		
 
 	def tick(self):
 		time.sleep(0.5)
 	
 	def destroy(self):
+		print("Destruindo ator e sensores...")
 		actors = [
 			self.camera_sensor,
 			self.collision_sensor,
@@ -152,7 +158,7 @@ class World(object):
 			if actor is not None:
 				actor.destroy()
  
-	def getCameraImage(self, image): 
+	def getCameraImage(self, image, env): 
 		'''
 		é realizado automaticamento 
 		quando há uma nova imagem disponível pelo sensor camera_sensor.listen
@@ -160,14 +166,15 @@ class World(object):
 		image.convert(cc.Raw)
 		array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
 		array = np.reshape(array, (image.height, image.width, 4))
+		
 		array = array[:, :, :3]
 		array = array[:, :, ::-1]
-		self.observation = array
+		env.observation = array #repassa para o ambinte uma nova imagem da camera
 
 		'''
-		plt.imshow(array)
+		#show imagem da camera
+		plt.imshow(self.observation)
 		plt.show()
-		time.sleep(0.5)
 		plt.close()
 		'''
 
@@ -192,36 +199,41 @@ def main():
 	world = None
 
 	try:
+		print("Tentando conectar ao servidor Carla...")
 		client = carla.Client('127.0.0.1', 2000)
 		client.set_timeout(1.0)
+
+		print("Conectado com sucesso.")
 		
 		world = World(client.get_world())        
 		env = Env(world)
 		print("Iniciando episodios...")
 		
-		'''
-		'''
 		qtd_acoes = 7
 		env.reset()
+		#print("RECEBENDO IMAGEM SUPOSTAMENTE PREPARADA")
+
 		observation = env.observation #primeira observ
+		
 		ep = 0
-		n = 1000
-		while ep < n:
-			print("Episodio", ep+1)
+		qtd_episodios = 1000
+		
+		while ep < qtd_episodios:
+			print("\nEpisodio", ep+1)
 			env.world.tick()
 			#action = dqn.predict(observation)
 			action = randrange(qtd_acoes)
 			#print("Acao:", action)
 			observation, reward, done, info = env.step(action)
-			print("Reward: % 5.3f " % reward)
+			print("\tReward: % 3.3f " % reward)
 			if done:
 				print("Fim do agente #colisao?")
 				break
 			ep = ep + 1
-
+		
 
 	except RuntimeError:
-		print("treta: RuntimeError")
+		print("\n\ntreta: RuntimeError")
 		#traceback.print_exc()
 		pass
 
