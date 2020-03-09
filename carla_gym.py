@@ -42,7 +42,6 @@ class Env(object):
 		self.world.camera_sensor.listen(lambda img: self.world.getCameraImage(img, self))
 		print("Ator resetado...")
 
-		#time.sleep(1)
 	
 	def applyReward(self):
 		#se houve colisão, negativa em X pontos e termina
