@@ -48,7 +48,6 @@ class Env(object):
 		if self.world.colission_history > 0:
 			self.reward = self.reward - 10
 			self.done = True
-			#print("ApplyReward - DONE !")
 			return
 
 		#se esta perto do objetivo, perde menos pontos
@@ -103,8 +102,8 @@ class World(object):
 		self.camera_sensor = None
 		self.destiny = carla.Location(x=9.9, y=0.3, z=20.3)
 		self.last_distance = 0
-		#self.restart()
 		self.colission_history = 0
+		#restart do world é feito pelo Enviroment
 
 	def spawnPlayer(self):
 		#Cria um audi tt no ponto primeiro waypoint dos spawns
@@ -119,7 +118,6 @@ class World(object):
 
 	def restart(self):
 		# Set up the sensors.
-		#self.collision_sensor = CollisionSensor(self.player, self.hud)
 		self.destroy()
 		self.spawnPlayer()
 		self.config_camera()
@@ -154,8 +152,6 @@ class World(object):
 		actors = [
 			self.camera_sensor,
 			self.collision_sensor,
-			#self.lane_invasion_sensor.sensor,
-			#self.gnss_sensor.sensor,
 			self.player]
 		for actor in actors:
 			if actor is not None:
@@ -174,12 +170,6 @@ class World(object):
 		array = array[:, :, ::-1]
 		env.observation = array #repassa para o ambinte uma nova imagem da camera
 
-		'''
-		#show imagem da camera
-		plt.imshow(self.observation)
-		plt.show()
-		plt.close()
-		'''
 
 	def defineDestiny(self, d):
 		self.destiny = d
@@ -187,14 +177,11 @@ class World(object):
 	def destiny_dist(self):
 		pos = self.player.get_location()
 		distance = pos.distance(self.destiny)
-		#print("Posição: ", pos)
-		#print("Distancia objetivo: ", distance )
 		return distance
 
 	def velocAtual(self):
 		v = self.player.get_velocity()
 		vel = int(3.6 * math.sqrt(v.x**2 + v.y**2 + v.z**2))
-		#print(vel)
 		return vel
 
 
@@ -214,7 +201,6 @@ def main():
 		
 		qtd_acoes = 7
 		env.reset()
-		#print("RECEBENDO IMAGEM SUPOSTAMENTE PREPARADA")
 
 		observation = env.observation #primeira observ
 		
