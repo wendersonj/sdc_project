@@ -214,6 +214,39 @@ def main():
 			action = randrange(qtd_acoes)
 			#print("Acao:", action)
 			observation, reward, done, info = env.step(action)
+
+			
+			''' DQN 
+			--definir as taxas e variaveis como epsilon-greedy
+			--
+			
+			preprocessar a primeira imagem ...
+			repetir ate acabar os episodios
+				cnn para processar a observation (alterar para receber 4 observations); as saidas da cnn são as ações possiveis
+				com os valores de saída:
+					escolher ação tirando um numero aleatório. se for menor, usar ação aleatório, senão, usa a melhor ação Q
+				realizar a ação
+				com o novo estado e recompensa, preprocessar a imagem
+				salvar a nova transição (imagem, acao, recompensa, proxima imagem resultante da ação) no buffer de experiencias [substituir a mais antiga, caso tenha ultrapassado a capacidade %]
+
+				tirar algumas experiencias aleatorias do buffer para calcular o loss
+					--calculo loss com target network
+					--realizar o gradiente em nossa rede atual
+				apos K passos, atualizar a targe network com os valores de pesos da rede atual 
+			
+
+
+
+
+
+				
+
+
+
+			'''
+			
+			
+
 			print("\tReward: % 3.3f " % reward)
 			if done:
 				print("Fim do agente #colisao?")
