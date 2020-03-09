@@ -51,10 +51,14 @@ class Env(object):
 			self.done = True
 			#print("ApplyReward - DONE !")
 			return
-		#se esta perto do objetivo, perde menos pontos
-		self.reward = self.reward - (self.world.destiny_dist()/10000) #possivel problema: ele pode querer subir em calçadas ou colidir a chegar no objetivo
 
-		self.reward = self.reward + (self.world.velocAtual()/360)
+		#se esta perto do objetivo, perde menos pontos
+		dist_atual = self.world.destiny_dist()
+		self.reward = self.reward + (dist_atual - self.world.last_distance)/dist_atual 
+		self.world.last_distance = dist_atual
+		
+		vel = self.world.velocAtual()
+		self.reward = self.reward + (vel/vel+1)
 	
 
 	def step(self, action):
@@ -99,6 +103,7 @@ class World(object):
 		self.collision_sensor = None
 		self.camera_sensor = None
 		self.destiny = carla.Location(x=9.9, y=0.3, z=20.3)
+		self.last_distance = 0
 		#self.restart()
 		self.colission_history = 0
 
