@@ -22,8 +22,29 @@ from matplotlib import pyplot as plt
 import traceback
 from carla import ColorConverter as cc
 
+#imports to tensorflow
+from __future__ import absolute_import, division, print_function, unicode_literals
+
+import tensorflow as tf
+
+from tensorflow.keras import datasets, layers, models
+import matplotlib.pyplot as plt
+
 camera_size_x = 800
 camera_size_y = 600
+
+class q_network(object):
+	model = models.Sequential()
+	model.add(layers.Conv2D(32, (3, 3), activation='relu', input_shape=(camera_size_x,camera_size_y , 3)))
+	model.add(layers.MaxPooling2D((2, 2)))
+	model.add(layers.Conv2D(64, (3, 3), activation='relu'))
+	model.add(layers.MaxPooling2D((2, 2)))
+	model.add(layers.Conv2D(64, (3, 3), activation='relu'))
+	model.add(layers.Flatten())
+	model.add(layers.Dense(64, activation='relu'))
+	model.add(layers.Dense(qtd_acoes))
+	model.summary()
+	return model
 
 class Env(object):
 	def __init__(self, world):
@@ -206,6 +227,8 @@ def main():
 		
 		ep = 0
 		qtd_episodios = 1000
+		main_net = q_network()
+		target_net = q_network()
 		
 		while ep < qtd_episodios:
 			print("\nEpisodio", ep+1)
@@ -222,7 +245,7 @@ def main():
 			
 			preprocessar a primeira imagem ...
 			repetir ate acabar os episodios
-				cnn para processar a observation (alterar para receber 4 observations); as saidas da cnn são as ações possiveis
+				ok cnn para processar a observation (alterar para receber 4 observations); as saidas da cnn são as ações possiveis
 				com os valores de saída:
 					escolher ação tirando um numero aleatório. se for menor, usar ação aleatório, senão, usa a melhor ação Q
 				realizar a ação
@@ -234,22 +257,26 @@ def main():
 					--realizar o gradiente em nossa rede atual
 				apos K passos, atualizar a targe network com os valores de pesos da rede atual 
 			
+			'''
+			
+			action = main_net.predict(observation)
+			if()
+			action = np.argmax(action[0])
 
 
 
 
-
-				
-
+			
 
 
 			'''
-			
-			
+			'''
+
+
 
 			print("\tReward: % 3.3f " % reward)
 			if done:
-				print("Fim do agente #colisao?")
+				print("Fim do episodio (done). #colisao")
 				break
 			ep = ep + 1
 		
