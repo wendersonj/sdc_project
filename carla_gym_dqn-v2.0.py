@@ -137,7 +137,10 @@ def main():
 				# sample experience
 				obs, act, next_obs, reward, done = sample_memories(batch_size)
 
-				next_act = targetQ.predict(obs) #valor de probabilidade da ação mais provável
+				#TALVEZ PRECISE USAR POR CONTA DO SHAPE DA OBS::
+				#obs = np.expand_dims(obs, axis=0) #transforma as observacoes em um array
+				#next_obs= np.expand_dims(obs, axis=0) #transforma as observacoes em um array
+				next_act = targetQ.predict(next_obs) #valor de probabilidade da ação mais provável
 				
 				y = reward + discount_factor * np.max(next_act) * (1 - done) 
 				# now we train the network and calculate loss
@@ -146,12 +149,11 @@ def main():
 				#gradient descent
 				#diferença entre das obse
 				
-				gradient_descent(y - mainQ.predict(obs))**2
+				#gradient_descent(y - mainQ.predict(obs))**2
 
 				mainQ.compile(optimizer='adam',
               loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
               metrics=['accuracy'])
-
 				train_loss = mainQ.fit(obs, y)
 				episodic_loss.append(train_loss) #historico
 
@@ -345,11 +347,13 @@ class World(object):
 		image.convert(cc.Raw)
 		array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
 		#array = np.reshape(array, (image.height, image.width, 4))
-		array = np.reshape(array, (image.height, image.width, 1)) #grayscale
 		
 		array = array[:, :, :3]
 		array = array[:, :, ::-1]
 		array = np.dot(array[...,:3], [0.299, 0.587, 0.144]) #to grayscale
+
+		##TODO: TESTAR
+		array = np.reshape(array, (image.height, image.width, 1)) #unidimensional 
 		env.observation = array #repassa para o ambinte uma nova imagem da camera
 
 
