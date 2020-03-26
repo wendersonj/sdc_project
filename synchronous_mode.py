@@ -183,6 +183,15 @@ def main():
                 display.blit(
                     font.render('% 5d FPS (simulated)' % fps, True, (255, 255, 255)),
                     (8, 28))
+                display.blit(
+                    font.render('% 5d Ação' % fps, True, (255, 255, 255)),
+                    (8, 28))
+                display.blit(
+                    font.render('% 5d Velocidade (km/h)' % fps, True, (255, 255, 255)),
+                    (8, 28))
+                display.blit(
+                    font.render('% 5d Recompensa' % fps, True, (255, 255, 255)),
+                    (8, 28))
                 pygame.display.flip()
 
     finally:
