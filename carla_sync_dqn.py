@@ -56,10 +56,10 @@ class Env(object):
         self.world = world
         self.player = None
 
-    def reset(self, sync_mode):
+    def reset(self):
         self.reward = 0
         self.done = 0
-        self.world.restart(sync_mode)
+        self.world.restart()
         self.player = self.world.player
         #self.world.camera_sensor.listen(
         #    lambda img: self.world.getCameraImage(img, self))
@@ -113,6 +113,7 @@ class Env(object):
         )  # 7 acoes
 
         print("\tAção: ", actions[action])
+        print("\tAção: ", actions[action])
 
         self.player.apply_control(carla.VehicleControl(
             actions[action][0], actions[action][1], reverse=actions[action][2]))
@@ -145,7 +146,7 @@ class World(object):
         # para nao comecar as ações sem ter iniciado adequadamente
         
 
-    def restart(self, sync_mode):
+    def restart(self):
         # Set up the sensors.
         self.destroy()
         self.spawnPlayer()
@@ -327,17 +328,15 @@ def main():
     client.set_timeout(1.0)
     
     try:
-        settings = world.get_settings()
-        settings.synchronous_mode = True
-        world.apply_settings(settings)
-
-        print("Conectado com sucesso.")
+        
         world = World(client.get_world())
         env = Env(world)
+        print("Conectado com sucesso.")
         print("Iniciando episodios...")
-
-        with CarlaSyncMode(world, world.camera_sensor, fps=fps) as sync_mode:
-            env.reset()
+        
+        env.reset()
+        print("Inicializando DQN...")
+        with CarlaSyncMode(world.world, world.camera_sensor, fps=fps) as sync_mode:    
             global_step = 0
             copy_steps = 100
             steps_train = 4
@@ -350,7 +349,7 @@ def main():
                 info = None
                 #obs = env.observation  # env.reset()
                 snapshot, image_rgb = sync_mode.tick(timeout=2.0) #snapshot nao esta sendo usado aqui
-                obs = convertImage(image_rgb)
+                obs = world.convertImage(image_rgb)
                 epoch = 0
                 episodic_reward = 0
                 actions_counter = Counter()
@@ -360,7 +359,7 @@ def main():
 
                     snapshot, image_rgb = sync_mode.tick(timeout=2.0) #atualiza o mundo e retorna as informações
                     # get the preprocessed game screen
-                    obs = convertImage(image_rgb)
+                    obs = world.convertImage(image_rgb)
                     # feed the game screen and get the Q values for each action
                     actions = mainQ.predict(obs)
 
