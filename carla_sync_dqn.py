@@ -34,6 +34,13 @@ from collections import deque, Counter
 from datetime import datetime
 
 
+try:
+    import queue
+except ImportError:
+    import Queue as queue
+
+
+
 camera_size_x = 800
 camera_size_y = 600
 qtd_acoes = 7
@@ -49,13 +56,15 @@ class Env(object):
         self.world = world
         self.player = None
 
-    def reset(self):
+    def reset(self, sync_mode):
         self.reward = 0
         self.done = 0
-        self.world.restart()
+        self.world.restart(sync_mode)
         self.player = self.world.player
-        self.world.camera_sensor.listen(
-            lambda img: self.world.getCameraImage(img, self))
+        #self.world.camera_sensor.listen(
+        #    lambda img: self.world.getCameraImage(img, self))
+        #self.world.camera_sensor.listen(self.world.image_queue.put)
+        
         print("Ator resetado...")
 
     def applyReward(self):
@@ -134,14 +143,16 @@ class World(object):
         spawn_point = (self.world.get_map().get_spawn_points())[0]
         self.player = self.world.try_spawn_actor(blueprint, spawn_point)
         # para nao comecar as ações sem ter iniciado adequadamente
-        time.sleep(2)
+        
 
-    def restart(self):
+    def restart(self, sync_mode):
         # Set up the sensors.
         self.destroy()
         self.spawnPlayer()
         self.config_camera()
         self.config_collision_sensor()
+        time.sleep(2)
+
         print("Iniciando componentes do ator...")
 
     def config_collision_sensor(self):
@@ -164,9 +175,10 @@ class World(object):
         camera_bp.set_attribute('fov', '110')  # angulo horizontal de 110graus
         self.camera_sensor = self.world.spawn_actor(
             camera_bp, camera_transform, attach_to=self.player)
-
+    '''
     def tick(self):
         time.sleep(0.5)
+    '''
 
     def destroy(self):
         print("Destruindo ator e sensores...")
@@ -178,7 +190,8 @@ class World(object):
             if actor is not None:
                 actor.destroy()
 
-    def getCameraImage(self, image, env):
+    #def getCameraImage(self, image):
+    def convertImage(self, image):
         '''
         é realizado automaticamento 
         quando há uma nova imagem disponível pelo sensor camera_sensor.listen
@@ -189,14 +202,12 @@ class World(object):
         array = array[:, :, :3]
         array = array[:, :, ::-1]
         #array = np.dot(array[..., :3], [0.299, 0.587, 0.144])  #to_grayscale:transforma a matriz 3d em 1d por meio da multiplicação
-
-
-
         # TODO: TESTAR
         # unidimensional
         array = np.expand_dims(array, axis=0)
+        return array
         
-        env.observation = array  # repassa para o ambinte uma nova imagem da camera
+        #env.observation = array  # repassa para o ambinte uma nova imagem da camera
 
     def defineDestiny(self, d):
         self.destiny = d
@@ -211,7 +222,49 @@ class World(object):
         vel = int(3.6 * math.sqrt(v.x**2 + v.y**2 + v.z**2))
         return vel
 
+class CarlaSyncMode(object):
+    def __init__(self, world, *sensors, **kwargs):
+        self.world = world
+        self.sensors = sensors
+        self.frame = None
+        self.delta_seconds = 1.0 / kwargs.get('fps', 20) #default value de fps=20
+        self._queues = []
+        self._settings = None
 
+    def __enter__(self):
+        self._settings = self.world.get_settings()
+        self.frame = self.world.apply_settings(carla.WorldSettings(
+            no_rendering_mode=True, #trocar para testar
+            synchronous_mode=True,
+            fixed_delta_seconds=self.delta_seconds))
+
+        def make_queue(register_event):
+            q = queue.Queue()
+            register_event(q.put)
+            self._queues.append(q)
+
+        make_queue(self.world.on_tick)
+        for sensor in self.sensors:
+            make_queue(sensor.listen)
+        return self
+
+    def tick(self, timeout):
+        self.frame = self.world.tick() #manda o mundo atualizar
+        data = [self._retrieve_data(q, timeout) for q in self._queues]
+        #debug
+        #print(data)
+        #sleep(10)
+        assert all(x.frame == self.frame for x in data)
+        return data
+
+    def __exit__(self, *args, **kwargs):
+        self.world.apply_settings(self._settings)
+
+    def _retrieve_data(self, sensor_queue, timeout):
+        while True:
+            data = sensor_queue.get(timeout=timeout)
+            if data.frame == self.frame:
+                return data
 
 epsilon = 0.5
 eps_min = 0.05
@@ -226,11 +279,6 @@ num_episodes = 800
 batch_size = 48
 learning_rate = 0.001
 discount_factor = 0.97
-
-#input_shape = (None, camera_size_x, camera_size_y, 1)
-
-
-####
 
 def epsilon_greedy(action, step):
     p = np.random.random(1).squeeze()
@@ -265,114 +313,108 @@ def generateNetwork(scope):
                   metrics=['accuracy'])
     return model
 
-#logdir = 'logs'
-#tf.reset_default_graph()
-
 mainQ = generateNetwork('mainQ')
 targetQ = generateNetwork('targetQ')
 
-#action = tf.Variable(0, dtype=uint8)
 action = 0
-#y = tf.placeholder(tf.float32, shape=(None, 1))
 y=0
 
-#loss = tf.reduce_mean(tf.square(y - Q_action))
-#init = tf.global_variables_initializer()
-
 def main():
+    fps = 60
     world = None
+    print("Tentando conectar ao servidor Carla...")
+    client = carla.Client('127.0.0.1', 2000)
+    client.set_timeout(1.0)
+    
     try:
-        #try:
-        print("Tentando conectar ao servidor Carla...")
-        client = carla.Client('127.0.0.1', 2000)
+        settings = world.get_settings()
+        settings.synchronous_mode = True
+        world.apply_settings(settings)
 
-        client.set_timeout(1.0)
-        #except RuntimeError:
-        #    print("Servidor offline.")
-        #    exit(1)
-        #else:
         print("Conectado com sucesso.")
-
         world = World(client.get_world())
         env = Env(world)
         print("Iniciando episodios...")
 
-        env.reset()
+        with CarlaSyncMode(world, world.camera_sensor, fps=fps) as sync_mode:
+            env.reset()
+            global_step = 0
+            copy_steps = 100
+            steps_train = 4
+            start_steps = 2000
 
-        global_step = 0
-        copy_steps = 100
-        steps_train = 4
-        start_steps = 2000
+            # for each episode
+            for i in range(num_episodes):
+                #env.world.tick()
+                done = 0
+                info = None
+                #obs = env.observation  # env.reset()
+                snapshot, image_rgb = sync_mode.tick(timeout=2.0) #snapshot nao esta sendo usado aqui
+                obs = convertImage(image_rgb)
+                epoch = 0
+                episodic_reward = 0
+                actions_counter = Counter()
+                episodic_loss = []
 
-        # for each episode
-        for i in range(num_episodes):
-            env.world.tick()
-            done = 0
-            info = None
-            obs = env.observation  # env.reset()
-            epoch = 0
-            episodic_reward = 0
-            actions_counter = Counter()
-            episodic_loss = []
+                while not done:
 
-            while not done:
+                    snapshot, image_rgb = sync_mode.tick(timeout=2.0) #atualiza o mundo e retorna as informações
+                    # get the preprocessed game screen
+                    obs = convertImage(image_rgb)
+                    # feed the game screen and get the Q values for each action
+                    actions = mainQ.predict(obs)
 
-                # get the preprocessed game screen
-                obs = env.observation
-                # feed the game screen and get the Q values for each action
-                actions = mainQ.predict(obs)
+                    # get the action
+                    # escolhe a posicao com maior probabilidade
+                    #action.assign(np.argmax(actions))
+                    action = np.argmax(actions)
+                    actions_counter[str(action)] += 1
 
-                # get the action
-                # escolhe a posicao com maior probabilidade
-                #action.assign(np.argmax(actions))
-                action = np.argmax(actions)
-                actions_counter[str(action)] += 1
+                    # select the action using epsilon greedy policy
+                    action = epsilon_greedy(action, global_step)
 
-                # select the action using epsilon greedy policy
-                action = epsilon_greedy(action, global_step)
+                    # now perform the action and move to the next state, next_obs, receive reward
+                    next_obs, reward, done, info = env.step(action)
 
-                # now perform the action and move to the next state, next_obs, receive reward
-                next_obs, reward, done, info = env.step(action)
+                    # Store this transistion as an experience in the replay buffer
+                    exp_buffer.append([obs, action, next_obs, reward, done])
 
-                # Store this transistion as an experience in the replay buffer
-                exp_buffer.append([obs, action, next_obs, reward, done])
+                    # After certain steps, we train our Q network with samples from the experience replay buffer
+                    if global_step % steps_train == 0 and global_step > start_steps:
 
-                # After certain steps, we train our Q network with samples from the experience replay buffer
-                if global_step % steps_train == 0 and global_step > start_steps:
+                        # sample experience
+                        obs, act, next_obs, reward, done = sample_memories(
+                            batch_size)
 
-                    # sample experience
-                    obs, act, next_obs, reward, done = sample_memories(
-                        batch_size)
+                        # TALVEZ PRECISE USAR POR CONTA DO SHAPE DA OBS::
+                        # obs = np.expand_dims(obs, axis=0) #transforma as observacoes em um array
+                        # next_obs= np.expand_dims(obs, axis=0) #transforma as observacoes em um array
+                        # valor de probabilidade da ação mais provável
+                        targetValues = targetQ.predict(next_obs)
+                        bestAction = np.argmax(targetValues)
 
-                    # TALVEZ PRECISE USAR POR CONTA DO SHAPE DA OBS::
-                    # obs = np.expand_dims(obs, axis=0) #transforma as observacoes em um array
-                    # next_obs= np.expand_dims(obs, axis=0) #transforma as observacoes em um array
-                    # valor de probabilidade da ação mais provável
-                    targetValues = targetQ.predict(next_obs)
-                    bestAction = np.argmax(targetValues)
+                        y = reward + discount_factor * \
+                            np.max(targetValues) * (1 - done)
+                        targetValues[bestAction] = y
+                        # now we train the network and calculate loss
+                        # train mode
 
-                    y = reward + discount_factor * \
-                        np.max(targetValues) * (1 - done)
-                    targetValues[bestAction] = y
-                    # now we train the network and calculate loss
-                    # train mode
+                        # gradient descent (x=obs e y=recompensa)
 
-                    # gradient descent (x=obs e y=recompensa)
+                        train_loss = mainQ.fit(obs, targetValues)
+                        episodic_loss.append(train_loss)  # historico
 
-                    train_loss = mainQ.fit(obs, targetValues)
-                    episodic_loss.append(train_loss)  # historico
+                    # after some interval we copy our main Q network weights to target Q network
+                    if (global_step+1) % copy_steps == 0 and global_step > start_steps:
+                        # Copy networks weights
+                        targetQ.set_weights(mainQ.get_weights())
 
-                # after some interval we copy our main Q network weights to target Q network
-                if (global_step+1) % copy_steps == 0 and global_step > start_steps:
-                    # Copy networks weights
-                    targetQ.set_weights(mainQ.get_weights())
+                    obs = next_obs
+                    epoch += 1
+                    global_step += 1
+                    episodic_reward += reward
 
-                obs = next_obs
-                epoch += 1
-                global_step += 1
-                episodic_reward += reward
-
-            print('Epoch', epoch, 'Reward', episodic_reward,)
+                print('Epoch', epoch, 'Reward', episodic_reward,)
 
     except RuntimeError:
         print("\n\ntreta: RuntimeError")
