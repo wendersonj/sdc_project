@@ -1,3 +1,9 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+# In[ ]:
+
+
 '''
 Créditos do código base da DQN ao autor: ??, 2018
 DQN modificada por Wenderson Souza
@@ -40,6 +46,8 @@ except ImportError:
     import Queue as queue
 
 
+# In[ ]:
+
 
 camera_size_x = 800
 camera_size_y = 600
@@ -55,6 +63,7 @@ class Env(object):
         self.info = None
         self.world = world
         self.player = None
+        self.dict_act=["sem acao","frente","frente-direita", "frente-esquerda", "ré/freio", "ré-direita", "ré-esquerda"]
 
     def reset(self):
         self.reward = 0
@@ -73,16 +82,20 @@ class Env(object):
             self.reward = self.reward - 10
             self.done = 1
             return
-
+        
         # se esta perto do objetivo, perde menos pontos
         dist_atual = self.world.destiny_dist()
-        self.reward = self.reward + \
-            (dist_atual - self.world.last_distance)/dist_atual
+        self.reward = self.reward +             (dist_atual - self.world.last_distance)/dist_atual
         self.world.last_distance = dist_atual
+
+        if dist_atual <= 10: #se esta a menos de 10unidades do destino, fim.
+            self.reward = self.reward + 100
+            self.done = 1
+            return
 
         vel = self.world.velocAtual()
         #if(vel >= 0):
-        self.reward = self.reward + (vel/(vel+1))
+        #self.reward = self.reward + (vel/(vel+1)) #[RETIRADO para verificar se o veículo irá se locomover mais]
 
     def step(self, action):
 
@@ -111,9 +124,9 @@ class Env(object):
             (throttle, -0.5, True),  # ré-direita
             (throttle, 0.5, True)  # ré-esquerda
         )  # 7 acoes
-
-        print("\tAção: ", actions[action])
-        print("\tAção: ", actions[action])
+        
+        #print("\tAção: ", self.dict_act[action] ,"(",actions[action], ")")
+        #print("\tAção: ", self.dict_act[action])
 
         self.player.apply_control(carla.VehicleControl(
             actions[action][0], actions[action][1], reverse=actions[action][2]))
@@ -164,7 +177,7 @@ class World(object):
 
     def on_collision(self, event):
         self.colission_history += 1
-        print("\tMais uma colisão...")
+        print("\n|| Mais uma colisão... || ")
 
     def config_camera(self):
         camera_bp = self.world.get_blueprint_library().find('sensor.camera.rgb')
@@ -173,13 +186,9 @@ class World(object):
         camera_bp.set_attribute('image_size_y', str(camera_size_y))
         # Captura uma imagem a cada 50hz = 0.02
         #camera_bp.set_attribute('sensor_tick', '1')
-        camera_bp.set_attribute('fov', '110')  # angulo horizontal de 110graus
+        #camera_bp.set_attribute('fov', '110')  # angulo horizontal de 110graus
         self.camera_sensor = self.world.spawn_actor(
             camera_bp, camera_transform, attach_to=self.player)
-    '''
-    def tick(self):
-        time.sleep(0.5)
-    '''
 
     def destroy(self):
         print("Destruindo ator e sensores...")
@@ -314,36 +323,57 @@ def generateNetwork(scope):
                   metrics=['accuracy'])
     return model
 
+
+# In[ ]:
+
+
 mainQ = generateNetwork('mainQ')
 targetQ = generateNetwork('targetQ')
 
 action = 0
 y=0
 
-def main():
-    fps = 60
-    world = None
-    print("Tentando conectar ao servidor Carla...")
-    client = carla.Client('127.0.0.1', 2000)
-    client.set_timeout(1.0)
-    
+
+# In[ ]:
+
+
+def connect(world, client):
     try:
-        
+        print("Tentando conectar ao servidor Carla...")
+        client = carla.Client('localhost', 2000)
+        client.set_timeout(1.0)
         world = World(client.get_world())
+    except RuntimeError:
+        print("Falha na conexão.")
+        return None, None
+    print("Conectado com sucesso.")
+    return world, client
+    
+    
+
+
+# In[ ]:
+
+
+def main(world, client):
+    fps = 60
+    world=world
+    client=client
+    try:
         env = Env(world)
-        print("Conectado com sucesso.")
         print("Iniciando episodios...")
-        
+        sleep(2)
         env.reset()
         print("Inicializando DQN...")
         with CarlaSyncMode(world.world, world.camera_sensor, fps=fps) as sync_mode:    
             global_step = 0
-            copy_steps = 100
-            steps_train = 4
-            start_steps = 2000
+            copy_steps = 100 #a cada x passos irá copiar a main_network para a target_network
+            steps_train = 5 #a cada x passos irá treinar a main_network
+            start_steps = 200 #passos inicias . default=2000
 
             # for each episode
             for i in range(num_episodes):
+                print("--| Episodio", num_episodes, " |--")
                 #env.world.tick()
                 done = 0
                 info = None
@@ -356,7 +386,7 @@ def main():
                 episodic_loss = []
 
                 while not done:
-
+                    print("|-step ", global_step, "begin ; ")
                     snapshot, image_rgb = sync_mode.tick(timeout=2.0) #atualiza o mundo e retorna as informações
                     # get the preprocessed game screen
                     obs = world.convertImage(image_rgb)
@@ -377,10 +407,11 @@ def main():
 
                     # Store this transistion as an experience in the replay buffer
                     exp_buffer.append([obs, action, next_obs, reward, done])
+                    print(" Reward step: ",reward, "-|")
 
                     # After certain steps, we train our Q network with samples from the experience replay buffer
                     if global_step % steps_train == 0 and global_step > start_steps:
-
+                        print("--atualização da Q-Network %100passos--")
                         # sample experience
                         obs, act, next_obs, reward, done = sample_memories(
                             batch_size)
@@ -392,8 +423,7 @@ def main():
                         targetValues = targetQ.predict(next_obs)
                         bestAction = np.argmax(targetValues)
 
-                        y = reward + discount_factor * \
-                            np.max(targetValues) * (1 - done)
+                        y = reward + discount_factor *                             np.max(targetValues) * (1 - done)
                         targetValues[bestAction] = y
                         # now we train the network and calculate loss
                         # train mode
@@ -402,6 +432,7 @@ def main():
 
                         train_loss = mainQ.fit(obs, targetValues)
                         episodic_loss.append(train_loss)  # historico
+                        print("Episodic Loss: ", episodic_loss)
 
                     # after some interval we copy our main Q network weights to target Q network
                     if (global_step+1) % copy_steps == 0 and global_step > start_steps:
@@ -412,8 +443,8 @@ def main():
                     epoch += 1
                     global_step += 1
                     episodic_reward += reward
-
-                print('Epoch', epoch, 'Reward', episodic_reward,)
+                    print('Epoch', epoch, 'Reward', episodic_reward,)
+                
 
     except RuntimeError:
         print("\n\ntreta: RuntimeError")
@@ -426,7 +457,28 @@ def main():
             world.destroy()
 
 
-if __name__ == '__main__':
-    main()
+print("Ready to begin.")
+
+
+# In[ ]:
+
+
+world=None
+client=None
+world, client=connect(world, client)
+
+
+# In[ ]:
+
+
+if __name__ == '__main__' and world!=None and client != None :
+    main(world, client)
+else:
+    print("Erro. Verifique a conexão.")
+
+
+# In[ ]:
+
+
 
 
