@@ -318,7 +318,11 @@ def epsilon_greedy(action, step):
 def sample_memories(batch_size):
     perm_batch = np.random.permutation(len(exp_buffer))[:batch_size]
     mem = np.array(exp_buffer)[perm_batch]
-    return np.array(mem[:, 0]), np.array(mem[:, 1]), np.array(mem[:, 2]), np.array(mem[:, 3]), np.array(mem[:, 4])
+    #return np.array([x for x in mem[:, 0]]), np.array(mem[:, 1]), np.array(mem[:, 2]), np.array(mem[:, 3]), np.array(mem[:, 4])
+    #return mem[:, 0], mem[:, 1], mem[:, 2], mem[:, 3], mem[:, 4]
+    return mem[:, 0][0], mem[:, 1][0], mem[:, 2][0], mem[:, 3][0], mem[:, 4][0]
+    
+    return np.array(mem[:, 0][0]), np.array(mem[:, 1][0]), np.array(mem[:, 2][0]), np.array(mem[:, 3][0]), np.array(mem[:, 4][0])
 
 
 def generateNetwork(scope):
@@ -431,8 +435,7 @@ def main(world, client):
                     if global_step % steps_train == 0 and global_step > start_steps:
                         print("\n--atualização da Q-Network %100passos--")
                         # sample experience
-                        obs, act, next_obs, reward, done = sample_memories(
-                            batch_size)
+                        obs, act, next_obs, reward, done = sample_memories(batch_size)
 
                         # TALVEZ PRECISE USAR POR CONTA DO SHAPE DA OBS::
                         # obs = np.expand_dims(obs, axis=0) #transforma as observacoes em um array
