@@ -402,7 +402,7 @@ def main(world, client):
                 episodic_loss = []
 
                 while not done:
-                    print("|-step(total)", global_step, "begin ; ")
+                    print("|-step(total)", global_step, "begin. ")
                     #snapshot, image_rgb = sync_mode.tick(timeout=2.0) #atualiza o mundo e retorna as informações
                     # get the preprocessed game screen
                     #obs = 
@@ -425,11 +425,11 @@ def main(world, client):
                     
                     # Store this transistion as an experience in the replay buffer
                     exp_buffer.append([obs, action, next_obs, reward, done])
-                    print(" Reward step: ",reward, "-|")
+                    print("Finish with reward step: ",reward, "-|")
 
                     # After certain steps, we train our Q network with samples from the experience replay buffer
                     if global_step % steps_train == 0 and global_step > start_steps:
-                        print("--atualização da Q-Network %100passos--")
+                        print("\n--atualização da Q-Network %100passos--")
                         # sample experience
                         obs, act, next_obs, reward, done = sample_memories(
                             batch_size)
@@ -461,8 +461,8 @@ def main(world, client):
                     epoch += 1
                     global_step += 1
                     episodic_reward += reward
-                    print('Epoch(passos)', epoch, ' and step Reward: ', reward)
-                print('Episode', num_episode, ' and episodic(total) Reward: ', episodic_reward, "--%")
+                    #print('Epoch(passos)', epoch, ' and step Reward: ', reward)
+                print('\nEpisodio ', num_episode, 'com ', epochs, 'passos and recompensa total: ', episodic_reward, "--%")
                 
 
     except RuntimeError:
