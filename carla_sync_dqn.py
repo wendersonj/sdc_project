@@ -441,11 +441,15 @@ def main(world, client):
                         # valor de probabilidade da ação mais provável
                         targetValues = targetQ.predict(next_obs)
                         print("\nTarget Values: ", targetValues)
+                        
                         bestAction = np.argmax(targetValues)
                         print("\nBestAction: ", bestAction)
+                        
                         y = reward + discount_factor *                             np.max(targetValues) * (1 - done)
-                        print("\ny: ", y)
-                        targetValues[bestAction] = y
+                        print("\nY atualizado: ", y)
+                        print("\nAntes (melhor acao): ", targetValues[0][bestAction], "| Depois: ", y)
+                        
+                        targetValues[0][bestAction] = y
                         # now we train the network and calculate loss
                         # train mode
 
