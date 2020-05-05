@@ -320,10 +320,8 @@ def sample_memories(batch_size):
     mem = np.array(exp_buffer)[perm_batch]
     #return np.array([x for x in mem[:, 0]]), np.array(mem[:, 1]), np.array(mem[:, 2]), np.array(mem[:, 3]), np.array(mem[:, 4])
     #return mem[:, 0], mem[:, 1], mem[:, 2], mem[:, 3], mem[:, 4]
+    #return np.array(mem[:, 0][0]), np.array(mem[:, 1][0]), np.array(mem[:, 2][0]), np.array(mem[:, 3][0]), np.array(mem[:, 4][0])
     return mem[:, 0][0], mem[:, 1][0], mem[:, 2][0], mem[:, 3][0], mem[:, 4][0]
-    
-    return np.array(mem[:, 0][0]), np.array(mem[:, 1][0]), np.array(mem[:, 2][0]), np.array(mem[:, 3][0]), np.array(mem[:, 4][0])
-
 
 def generateNetwork(scope):
     #with tf.variable_scope(name_scope) as scope:
@@ -442,9 +440,11 @@ def main(world, client):
                         # next_obs= np.expand_dims(obs, axis=0) #transforma as observacoes em um array
                         # valor de probabilidade da ação mais provável
                         targetValues = targetQ.predict(next_obs)
+                        print("\nTarget Values: ", targetValues)
                         bestAction = np.argmax(targetValues)
-
+                        print("\nBestAction: ", bestAction)
                         y = reward + discount_factor *                             np.max(targetValues) * (1 - done)
+                        print("\ny: ", y)
                         targetValues[bestAction] = y
                         # now we train the network and calculate loss
                         # train mode
