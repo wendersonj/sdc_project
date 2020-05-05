@@ -318,7 +318,7 @@ def epsilon_greedy(action, step):
 def sample_memories(batch_size):
     perm_batch = np.random.permutation(len(exp_buffer))[:batch_size]
     mem = np.array(exp_buffer)[perm_batch]
-    return mem[:, 0], mem[:, 1], mem[:, 2], mem[:, 3], mem[:, 4]
+    return np.array(mem[:, 0]), np.array(mem[:, 1]), np.array(mem[:, 2]), np.array(mem[:, 3]), np.array(mem[:, 4])
 
 
 def generateNetwork(scope):
@@ -389,7 +389,7 @@ def main(world, client):
 
             # for each episode
             for i in range(num_episodes):
-                print("%-- Episodio", num_episodes)
+                print("\n%Episodio", num_episodes, " %")
                 #env.world.tick()
                 done = 0
                 info = None
@@ -402,7 +402,7 @@ def main(world, client):
                 episodic_loss = []
 
                 while not done:
-                    print("|-step(total)", global_step, "begin. ")
+                    print("| Step(total)", global_step, "begin. ")
                     #snapshot, image_rgb = sync_mode.tick(timeout=2.0) #atualiza o mundo e retorna as informações
                     # get the preprocessed game screen
                     #obs = 
@@ -425,7 +425,7 @@ def main(world, client):
                     
                     # Store this transistion as an experience in the replay buffer
                     exp_buffer.append([obs, action, next_obs, reward, done])
-                    print("Finish with reward step: ",reward, "-|")
+                    print("Finish with reward step: ",reward, " .|\n")
 
                     # After certain steps, we train our Q network with samples from the experience replay buffer
                     if global_step % steps_train == 0 and global_step > start_steps:
@@ -462,7 +462,7 @@ def main(world, client):
                     global_step += 1
                     episodic_reward += reward
                     #print('Epoch(passos)', epoch, ' and step Reward: ', reward)
-                print('\nEpisodio ', num_episode, 'com ', epochs, 'passos and recompensa total: ', episodic_reward, "--%")
+                print('\n% Episodio ', num_episode, 'com ', epochs, 'passos and recompensa total: ', episodic_reward, ". %")
                 
 
     except RuntimeError:
