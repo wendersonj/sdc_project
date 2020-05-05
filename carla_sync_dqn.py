@@ -1,7 +1,14 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[ ]:
+# In[12]:
+
+
+#import tensorflow as tf
+#print("Num GPUs Available: ", len(tf.config.experimental.list_physical_devices('GPU')))
+
+
+# In[3]:
 
 
 '''
@@ -46,7 +53,7 @@ except ImportError:
     import Queue as queue
 
 
-# In[ ]:
+# In[6]:
 
 
 camera_size_x = 800
@@ -104,7 +111,8 @@ class Env(object):
         #self.observation = getObservation(self.world.getObservation())
         self.applyReward()
 
-        return self.observation, self.reward, self.done, self.info
+        #return self.observation, self.reward, self.done, self.info #next_observation vem do tick no main
+        return self.reward, self.done, self.info
 
     def applyAction(self, action):
         speed_limit = 10
@@ -136,6 +144,12 @@ class Env(object):
 class World(object):
     def __init__(self, carla_world):
         self.world = carla_world
+        self.is_no_rendering = True #False or True
+        
+        settings = self.world.get_settings()
+        settings.no_rendering_mode = self.is_no_rendering
+        self.world.apply_settings(settings)
+        
         self.map = self.world.get_map()
         self.player = None
         self.collision_sensor = None
@@ -144,6 +158,8 @@ class World(object):
         self.last_distance = 0
         self.colission_history = 0
         # restart do world é feito pelo Enviroment
+        
+        
 
     def spawnPlayer(self):
         # Cria um audi tt no ponto primeiro waypoint dos spawns
@@ -285,8 +301,8 @@ buffer_len = 20000
 # limita a quantidade de experiencias. quando encher, retira as ultimas experiencias
 exp_buffer = deque(maxlen=buffer_len)
 
-num_episodes = 800
-batch_size = 48
+num_episodes = 100
+batch_size = 32
 learning_rate = 0.001
 discount_factor = 0.97
 
@@ -324,7 +340,7 @@ def generateNetwork(scope):
     return model
 
 
-# In[ ]:
+# In[3]:
 
 
 mainQ = generateNetwork('mainQ')
@@ -334,13 +350,13 @@ action = 0
 y=0
 
 
-# In[ ]:
+# In[4]:
 
 
-def connect(world, client):
+def connect(world, client, end='localhost'):
     try:
         print("Tentando conectar ao servidor Carla...")
-        client = carla.Client('localhost', 2000)
+        client = carla.Client(end, 2000)
         client.set_timeout(1.0)
         world = World(client.get_world())
     except RuntimeError:
@@ -352,7 +368,7 @@ def connect(world, client):
     
 
 
-# In[ ]:
+# In[5]:
 
 
 def main(world, client):
@@ -367,29 +383,29 @@ def main(world, client):
         print("Inicializando DQN...")
         with CarlaSyncMode(world.world, world.camera_sensor, fps=fps) as sync_mode:    
             global_step = 0
-            copy_steps = 100 #a cada x passos irá copiar a main_network para a target_network
+            copy_steps = 10 #a cada x passos irá copiar a main_network para a target_network
             steps_train = 5 #a cada x passos irá treinar a main_network
-            start_steps = 200 #passos inicias . default=2000
+            start_steps = 20 #passos inicias . default=200
 
             # for each episode
             for i in range(num_episodes):
-                print("--| Episodio", num_episodes, " |--")
+                print("%-- Episodio", num_episodes)
                 #env.world.tick()
                 done = 0
                 info = None
                 #obs = env.observation  # env.reset()
-                snapshot, image_rgb = sync_mode.tick(timeout=2.0) #snapshot nao esta sendo usado aqui
-                obs = world.convertImage(image_rgb)
+                snapshot, first_img = sync_mode.tick(timeout=2.0) #snapshot nao esta sendo usado aqui
+                obs = world.convertImage(first_img)
                 epoch = 0
                 episodic_reward = 0
                 actions_counter = Counter()
                 episodic_loss = []
 
                 while not done:
-                    print("|-step ", global_step, "begin ; ")
-                    snapshot, image_rgb = sync_mode.tick(timeout=2.0) #atualiza o mundo e retorna as informações
+                    print("|-step(total)", global_step, "begin ; ")
+                    #snapshot, image_rgb = sync_mode.tick(timeout=2.0) #atualiza o mundo e retorna as informações
                     # get the preprocessed game screen
-                    obs = world.convertImage(image_rgb)
+                    #obs = 
                     # feed the game screen and get the Q values for each action
                     actions = mainQ.predict(obs)
 
@@ -403,8 +419,10 @@ def main(world, client):
                     action = epsilon_greedy(action, global_step)
 
                     # now perform the action and move to the next state, next_obs, receive reward
-                    next_obs, reward, done, info = env.step(action)
-
+                    reward, done, info = env.step(action)
+                    snapshot, next_obs = sync_mode.tick(timeout=2.0) #atualiza o mundo e retorna as informações
+                    next_obs = world.convertImage(next_obs)
+                    
                     # Store this transistion as an experience in the replay buffer
                     exp_buffer.append([obs, action, next_obs, reward, done])
                     print(" Reward step: ",reward, "-|")
@@ -432,25 +450,29 @@ def main(world, client):
 
                         train_loss = mainQ.fit(obs, targetValues)
                         episodic_loss.append(train_loss)  # historico
-                        print("Episodic Loss: ", episodic_loss)
+                        print("|| Episodic Loss: ", episodic_loss)
 
                     # after some interval we copy our main Q network weights to target Q network
                     if (global_step+1) % copy_steps == 0 and global_step > start_steps:
                         # Copy networks weights
                         targetQ.set_weights(mainQ.get_weights())
 
-                    obs = next_obs
+                    obs = next_obs #troca a u
                     epoch += 1
                     global_step += 1
                     episodic_reward += reward
-                    print('Epoch', epoch, 'Reward', episodic_reward,)
+                    print('Epoch(passos)', epoch, ' and step Reward: ', reward)
+                print('Episode', num_episode, ' and episodic(total) Reward: ', episodic_reward, "--%")
                 
 
     except RuntimeError:
         print("\n\ntreta: RuntimeError")
         # traceback.print_exc()
         pass
-
+    except Exception:
+        traceback.print_exc()
+        pass
+    
     finally:
 
         if world is not None:
@@ -460,15 +482,15 @@ def main(world, client):
 print("Ready to begin.")
 
 
-# In[ ]:
+# In[7]:
 
 
 world=None
 client=None
-world, client=connect(world, client)
+world, client=connect(world, client)#, end='35.197.43.29')
 
 
-# In[ ]:
+# In[7]:
 
 
 if __name__ == '__main__' and world!=None and client != None :
