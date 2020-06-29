@@ -23,11 +23,8 @@ except IndexError:
 import carla
 import random
 import time
-#import logging
-import cv2
 import numpy as np
 import pdb
-from matplotlib import pyplot as plt
 import traceback
 from carla import ColorConverter as cc
 from collections import deque, Counter
@@ -188,12 +185,6 @@ class World(object):
         array = np.reshape(array, (image.height, image.width, 4))
         array = array[:, :, :3]
         array = array[:, :, ::-1]
-        #array = np.dot(array[..., :3], [0.299, 0.587, 0.144])  #to_grayscale:transforma a matriz 3d em 1d por meio da multiplicação
-
-
-
-        # TODO: TESTAR
-        # unidimensional
         array = np.expand_dims(array, axis=0)
         
         env.observation = array  # repassa para o ambinte uma nova imagem da camera
@@ -211,8 +202,6 @@ class World(object):
         vel = int(3.6 * math.sqrt(v.x**2 + v.y**2 + v.z**2))
         return vel
 
-
-
 epsilon = 0.5
 eps_min = 0.05
 eps_max = 1.0
@@ -226,11 +215,6 @@ num_episodes = 800
 batch_size = 48
 learning_rate = 0.001
 discount_factor = 0.97
-
-#input_shape = (None, camera_size_x, camera_size_y, 1)
-
-
-####
 
 def epsilon_greedy(action, step):
     p = np.random.random(1).squeeze()
@@ -265,32 +249,19 @@ def generateNetwork(scope):
                   metrics=['accuracy'])
     return model
 
-#logdir = 'logs'
-#tf.reset_default_graph()
-
 mainQ = generateNetwork('mainQ')
 targetQ = generateNetwork('targetQ')
 
-#action = tf.Variable(0, dtype=uint8)
 action = 0
-#y = tf.placeholder(tf.float32, shape=(None, 1))
 y=0
-
-#loss = tf.reduce_mean(tf.square(y - Q_action))
-#init = tf.global_variables_initializer()
 
 def main():
     world = None
     try:
-        #try:
         print("Tentando conectar ao servidor Carla...")
         client = carla.Client('127.0.0.1', 2000)
 
         client.set_timeout(1.0)
-        #except RuntimeError:
-        #    print("Servidor offline.")
-        #    exit(1)
-        #else:
         print("Conectado com sucesso.")
 
         world = World(client.get_world())
