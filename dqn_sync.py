@@ -29,6 +29,13 @@ from carla import ColorConverter as cc
 from collections import deque, Counter
 from datetime import datetime
 
+
+'''
+To-do:
+Receber três imagens da câmera por tick (percepção de movimento)
+'''
+
+
 # Variáveis Simulacao
 camera_size_x = 800
 camera_size_y = 600
@@ -65,6 +72,7 @@ class Env(object):
             "ré-direita",
             "ré-esquerda",
         ]
+        self.frameObs = None
 
     def reset(self):
         self.reward = 0
@@ -96,6 +104,7 @@ class Env(object):
         self.info = self.applyAction(action)
         world.carla_world.tick()  # atualiza o mundo
         self.applyReward()
+        print("Frame recebido: ", self.frameObs)
         return self.observation, self.reward, self.done, self.info
 
     def applyAction(self, action):
@@ -223,6 +232,8 @@ class World(object):
         array = array[:, :, ::-1]
         array = np.expand_dims(array, axis=0)
         env.observation = array  # repassa para o ambinte uma nova imagem da camera
+        env.frameObs = image.frame
+        print("Frame capturado:", image.frame)
 
     def defineDestiny(self, d):
         self.destiny = d
@@ -257,16 +268,16 @@ def generateNetwork(scope):
     model = models.Sequential()
     model.add(
         layers.Conv2D(
-            32, (3, 3), activation="relu", input_shape=(camera_size_y, camera_size_x, 3)
+            filters=64, kernel_size=3, activation="relu", input_shape=(600, 800, 3)
         )
-    )  # para usar imagem gray, tem que trocar o shape da imagem na layer. X e Y trocados
+    )  # para usar imagem gray, tem que trocar o shape da imagem na layer. Y, X.
+    model.add(layers.MaxPooling2D((2, 2))) #usa um filtro de max-pool 2x2: camera_size/2
+    model.add(layers.Conv2D(32, kernel_size=3, activation="relu"))
     model.add(layers.MaxPooling2D((2, 2)))
-    model.add(layers.Conv2D(64, (3, 3), activation="relu"))
-    model.add(layers.MaxPooling2D((2, 2)))
-    model.add(layers.Conv2D(64, (3, 3), activation="relu"))
+    model.add(layers.Conv2D(16, kernel_size=3, activation="relu")) #64
     model.add(layers.Flatten())
-    model.add(layers.Dense(128, activation="softmax"))
-    model.add(layers.Dense(qtd_acoes))
+    model.add(layers.Dense(8, activation="relu")) #128
+    model.add(layers.Dense(qtd_acoes, activation="softmax"))
     model.compile(optimizer="sgd", loss="mean_squared_error", metrics=["accuracy"])
     return model
 
@@ -275,7 +286,7 @@ def connect(world, client, ip="localhost"):
     try:
         print("Tentando conectar ao servidor Carla...")
         client = carla.Client(ip, 2000)
-        client.set_timeout(1.0)
+        client.set_timeout(10.0)
         carla_world = World(client.get_world())
     except RuntimeError:
         print("Falha na conexão.")
@@ -291,24 +302,23 @@ def main():
         env.reset()
         print("Inicializando DQN...")
 
-        global_step = 0
-        copy_steps = (
-            10  # a cada x passos irá copiar a main_network para a target_network
-        )
+        global_step = 0  # passos totais (somatorio dos passos em cada episodio)
+        copy_steps = 10 # a cada x passos irá copiar a main_network para a target_network
         steps_train = 5  # a cada x passos irá treinar a main_network
-        start_steps = 20  # passos inicias . default=200
+        start_steps = 20  # passos inicias. (somente após essa qtd de passo irá treinar começar a rede)
 
         print("Gerando rede DQN principal...")
-        # mainQ = generateNetwork('mainQ')
+        mainQ = generateNetwork('mainQ')
+        mainQ.summary()
         print("Gerando rede DQN alvo...")
-        # targetQ = generateNetwork('targetQ')
+        targetQ = generateNetwork('targetQ')
         print("Redes geradas.")
 
         action = 0
         y = 0
 
         for i in range(num_episodes):
-            print("\n%Episodio", num_episodes, "%")
+            print("\n%Episodio", i, "%")
             done = 0
             info = None
             world.carla_world.tick()  # atualiza o mundo
@@ -319,24 +329,33 @@ def main():
             episodic_loss = []
 
             while not done:
-                print("| Passo(total)", global_step, " - Início. ")
+                print("| Passo ", global_step, " - Início. ")
+                # Prediz uma ação (com base no que possui treinada) com base na observação - por enquanto, apenas uma imagem de câmera
                 actions = mainQ.predict(obs)
-                # get the action
-                # escolhe a posicao com maior probabilidade
-                action = np.argmax(actions)
-                actions_counter[str(action)] += 1
+                # A rede produz um resultado em %. Logo, escolhe a posição do vetor(ação) com maior probabilidade
+                action = np.argmax(
+                    actions
+                )  # neste caso, argmax retorna a posição com maior probabilidade
+                # actions_counter[str(action)] += 1 #?
 
-                # select the action using epsilon greedy policy
+                """ 
+                Por mais que a rede tenha escolhido uma ação mais "adequada"(maior probabilidade), o método da DQN usa a política de ganância, que verifica se deve usar a própria experiência (rede DQN) ou se explora o ambiente com uma nova ação aleatória.
+                """
                 action = epsilon_greedy(action, global_step)
 
-                # now perform the action and move to the next state, next_obs, receive reward
+                # Realiza a ação escolhida e recupera o próximo estado, a recompensa, info e se acabou(se houve colisão).
                 next_obs, reward, done, info = env.step(action)
+                print("next_obs:", next_obs)
+                print("reward:", reward)
+                print("done:", done)
+                print("info:", info)
+                exit(20)
 
-                # Store this transistion as an experience in the replay buffer
+                # Armazenamento das experiências no buffer de replay
                 exp_buffer.append([obs, action, next_obs, reward, done])
                 print("Terminou o passo com recompensa: ", reward, " .|\n")
 
-                # After certain steps, we train our Q network with samples from the experience replay buffer
+                # Treino da rede principal, após uma qtd de passos, usando as experiências do buffer de replay.
                 if global_step % steps_train == 0 and global_step > start_steps:
                     print("\n-- Atualização da Q-Network %100 passos --")
                     # sample experience
@@ -359,17 +378,19 @@ def main():
                     )
 
                     targetValues[0][bestAction] = y
-                    # now we train the network and calculate loss
-                    # gradient descent (x=obs e y=recompensa)
-                    train_loss = mainQ.fit(obs, targetValues)
+                    """
+                    now we train the network and calculate loss
+                    gradient descent (x=obs e y=recompensa)
+                    """
+                    train_loss = mainQ.fit(obs, targetValues, batch_size=batch_size, epochs=1, shuffle=True)
                     episodic_loss.append(train_loss)  # historico
-                    print("|| Loss Episódica: ", episodic_loss)
+                    print("|| Perda do episódio (episodic loss): ", episodic_loss)
 
                 if (global_step + 1) % copy_steps == 0 and global_step > start_steps:
                     # Cópia dos pesos da rede principal para a rede alvo.
                     targetQ.set_weights(mainQ.get_weights())
 
-                obs = next_obs  # troca a u
+                obs = next_obs  # troca a obs
                 passos_ep += 1
                 global_step += 1
                 episodic_reward += reward
@@ -377,15 +398,15 @@ def main():
                 "\nEpisódio ",
                 num_episode,
                 "com ",
-                epoch,
-                "passos and recompensa total: ",
+                passos_ep,
+                " passos e recompensa total de: ",
                 episodic_reward,
-                ".",
+                " pontos.",
             )
 
     except RuntimeError:
-        print("\n\ntreta: RuntimeError")
-        # traceback.print_exc()
+        print("\nRuntimeError. Trace: ")
+        traceback.print_exc()
         pass
     except Exception:
         traceback.print_exc()
@@ -393,6 +414,7 @@ def main():
     finally:
         if world is not None:
             world.destroy()
+
 
 """
 Conexão com o simulador
