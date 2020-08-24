@@ -28,6 +28,18 @@ import traceback
 from carla import ColorConverter as cc
 from collections import deque, Counter
 from datetime import datetime
+import queue
+
+from tensorflow.compat.v1 import ConfigProto
+from tensorflow.compat.v1 import InteractiveSession
+
+'''
+Para consertar o erro CUDNN_STATUS_INTERNAL_ERROR
+'''
+
+config = ConfigProto()
+config.gpu_options.allow_growth = True
+session = InteractiveSession(config=config)
 
 
 '''
@@ -58,7 +70,7 @@ client = None
 
 class Env(object):
     def __init__(self, world):
-        self.observation = None
+        #self.observation = None
         self.reward = 0
         self.done = 0
         self.info = None
@@ -73,13 +85,16 @@ class Env(object):
             "ré-esquerda",
         ]
         self.frameObs = None
+        self.image_queue = queue.Queue()
 
     def reset(self):
         self.reward = 0
         self.done = 0
         world.restart()
         self.player = world.player
-        world.camera_sensor.listen(lambda img: world.convertImage(img, env=self))
+        print("is player None? ", self.player)
+        print("Câmera iniciada")
+        world.camera_sensor.listen(lambda img: self.convertImage(img))
         print("Ator resetado...")
 
     def applyReward(self):
@@ -102,10 +117,10 @@ class Env(object):
 
     def step(self, action):
         self.info = self.applyAction(action)
-        world.carla_world.tick()  # atualiza o mundo
+        world.tick()  # atualiza o mundo
         self.applyReward()
-        print("Frame recebido: ", self.frameObs)
-        return self.observation, self.reward, self.done, self.info
+        print("Frame recebido (step): ", self.frameObs)
+        return self.getObservation(), self.reward, self.done, self.info
 
     def applyAction(self, action):
         speed_limit = 10
@@ -133,7 +148,27 @@ class Env(object):
         return None
 
     def getObservation(self):
-        return self.observation
+        print("Esperando imagem ...")
+        return self.image_queue.get()    
+
+    def convertImage(self, image):
+        """
+        é realizado automaticamente 
+        quando há uma nova imagem disponível pelo sensor camera_sensor.listen
+        """
+        # image.convert(cc.Raw)
+        array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
+        array = np.reshape(array, (image.height, image.width, 4))
+        array = array[:, :, :3]
+        array = array[:, :, ::-1]
+        array = np.expand_dims(array, axis=0)
+        print("Colocando imagem colocada na fila")    
+        self.image_queue.put(array)
+        print("Imagem colocada na fila")
+        #self.observation = array  # repassa para o ambinte uma nova imagem da camera
+        self.frameObs = image.frame
+        print("Frame capturado:", image.frame)
+
 
 
 class World(object):
@@ -157,6 +192,7 @@ class World(object):
             color = random.choice(blueprint.get_attribute("color").recommended_values)
             blueprint.set_attribute("color", color)
         # Spawn the player.
+        print("Carro-ego convocado no mapa")
         spawn_point = (self.carla_world.get_map().get_spawn_points())[0]
         self.player = self.carla_world.try_spawn_actor(blueprint, spawn_point)
         # para nao comecar as ações sem ter iniciado adequadamente
@@ -165,7 +201,11 @@ class World(object):
         prepara o carro
         """
         for i in range(100):
-            self.carla_world.tick()
+            self.tick()
+
+    def tick(self):
+        frame = self.carla_world.tick()
+        #print("Frame ticked: ", frame)
 
     def restart(self):
         # Set up the sensors.
@@ -219,21 +259,6 @@ class World(object):
         for actor in actors:
             if actor is not None:
                 actor.destroy()
-
-    def convertImage(self, image, env):
-        """
-        é realizado automaticamente 
-        quando há uma nova imagem disponível pelo sensor camera_sensor.listen
-        """
-        # image.convert(cc.Raw)
-        array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
-        array = np.reshape(array, (image.height, image.width, 4))
-        array = array[:, :, :3]
-        array = array[:, :, ::-1]
-        array = np.expand_dims(array, axis=0)
-        env.observation = array  # repassa para o ambinte uma nova imagem da camera
-        env.frameObs = image.frame
-        print("Frame capturado:", image.frame)
 
     def defineDestiny(self, d):
         self.destiny = d
@@ -297,8 +322,9 @@ def connect(world, client, ip="localhost"):
 
 def main():
     try:
+        print("Iniciando mundo Carla...")
         env = Env(world)
-        print("Iniciando episodios...")
+        print("Iniciando ambiente...")
         env.reset()
         print("Inicializando DQN...")
 
@@ -309,7 +335,7 @@ def main():
 
         print("Gerando rede DQN principal...")
         mainQ = generateNetwork('mainQ')
-        mainQ.summary()
+        #mainQ.summary()
         print("Gerando rede DQN alvo...")
         targetQ = generateNetwork('targetQ')
         print("Redes geradas.")
@@ -317,11 +343,12 @@ def main():
         action = 0
         y = 0
 
+        print("Iniciando episodios...")
         for i in range(num_episodes):
             print("\n%Episodio", i, "%")
             done = 0
             info = None
-            world.carla_world.tick()  # atualiza o mundo
+            world.tick()  # atualiza o mundo
             obs = env.getObservation()
             passos_ep = 0  # quantidade de passos realizados em um episodio
             episodic_reward = 0
@@ -329,7 +356,7 @@ def main():
             episodic_loss = []
 
             while not done:
-                print("| Passo ", global_step, " - Início. ")
+                print("| Passo ", global_step, " - Início ")
                 # Prediz uma ação (com base no que possui treinada) com base na observação - por enquanto, apenas uma imagem de câmera
                 actions = mainQ.predict(obs)
                 # A rede produz um resultado em %. Logo, escolhe a posição do vetor(ação) com maior probabilidade
@@ -349,7 +376,7 @@ def main():
                 print("reward:", reward)
                 print("done:", done)
                 print("info:", info)
-                exit(20)
+                #exit(20)
 
                 # Armazenamento das experiências no buffer de replay
                 exp_buffer.append([obs, action, next_obs, reward, done])
