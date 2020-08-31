@@ -113,12 +113,11 @@ class Env(object):
         vel = world.velocAtual()
 
         #não tenho noção de velocidade...
-            
-        if vel > SPEED_LIMIT and vel < 20:
+        if vel > SPEED_LIMIT and vel < 10:
             print("\nAcima do limite de velocidade de ", SPEED_LIMIT, "km/h. \nVelocidade Atual: ", vel)
             self.reward = self.reward + 0.02
         else:
-            self.reward = self.reward + 0.1
+            self.reward = self.reward + (1 - (vel/SPEED_LIMIT)**(0.4))
         
         
 
