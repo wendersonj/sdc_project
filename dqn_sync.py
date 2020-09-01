@@ -51,9 +51,8 @@ Receber três imagens da câmera por tick (percepção de movimento)
 
 
 # Variáveis Simulacao
-camera_size_x = 800
-camera_size_y = 600
-qtd_acoes = 7
+CAMERA_SIZE = (800, 600)
+QTD_ACOES = 7
 # Variáveis DQN
 epsilon = 0.5
 eps_min = 0.05
@@ -79,7 +78,7 @@ class Env(object):
         self.done = 0
         self.info = None
         self.player = None
-        self.dict_act = [
+        self.DICT_ACT = [
             "sem acao",
             "frente",
             "frente-direita",
@@ -91,6 +90,21 @@ class Env(object):
         self.frameObs = None
         self.image_queue = queue.Queue()
 
+        '''
+        Ações
+        throttle=aceleração
+        '''
+        self.THROTTLE = 0.5
+        self.ACTIONS = (
+            (0.0, 0.0, False),  # sem acao
+            (self.throttle, 0.0, False),  # frente
+            (self.throttle, -0.5, False),  # frente-direita
+            (self.throttle, 0.5, False),  # frente-esquerda
+            (self.throttle, 0.0, True),  # ré/freio
+            (self.throttle, -0.5, True),  # ré-direita
+            (self.throttle, 0.5, True),  # ré-esquerda
+        )  # 7 acoes
+
     def reset(self):
         print("Reiniciando ambiente...")
         self.reward = 0
@@ -101,7 +115,7 @@ class Env(object):
         print("is player None? ", self.player)
         print("Câmera iniciada")
         world.camera_sensor.listen(lambda img: self.convertImage(img))
-        print("Ator resetado...")
+        print("Ator resetado.")
 
     def applyReward(self):
         # se houve colisão, negativa em X pontos e termina
@@ -119,10 +133,8 @@ class Env(object):
         else:
             self.reward = self.reward + (1 - (vel/SPEED_LIMIT)**(0.4))
         
-        
-
-
         # se esta perto do objetivo, perde menos pontos
+        
         '''
         #não tenho noção de posição / localização
         dist_atual = world.destiny_dist()
@@ -142,32 +154,29 @@ class Env(object):
     def step(self, action):
         self.info = self.applyAction(action)
         world.tick()  # atualiza o mundo
+        '''
+        O que acontece se eu der 3 ticks ?  verificar o frame e as imagens recebidas
+        -verificar se consigo plotar
+        '''
        #print("Frame recebido (step): ", self.frameObs)
         self.applyReward()
         return self.getObservation(), self.reward, self.done, self.info
 
     def applyAction(self, action):
-        throttle = 0.5
-        actions = (
-            (0.0, 0.0, False),  # sem acao
-            (throttle, 0.0, False),  # frente
-            (throttle, -0.5, False),  # frente-direita
-            (throttle, 0.5, False),  # frente-esquerda
-            (throttle, 0.0, True),  # ré/freio
-            (throttle, -0.5, True),  # ré-direita
-            (throttle, 0.5, True),  # ré-esquerda
-        )  # 7 acoes
-
-        print("\tAção: ", actions[action] , '(', self.dict_act[action],')') 
+        print("\tAção: ", self.ACTIONS[action] , '(', self.DICT_ACT[action],')') 
         self.player.apply_control(
             carla.VehicleControl(
-                actions[action][0], actions[action][1], reverse=actions[action][2]
+                self.ACTIONS[action][0], self.ACTIONS[action][1], reverse=self.ACTIONS[action][2]
             )
         )
-        return self.dict_act[action]
+        return self.DICT_ACT[action]
 
     def getObservation(self):
         print("Esperando imagem ...")
+        '''
+        deve receber as três imagens e concatenar
+        '''
+
         return self.image_queue.get()    
 
     def convertImage(self, image):
@@ -179,11 +188,16 @@ class Env(object):
         array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
         array = np.reshape(array, (image.height, image.width, 4))
         array = array[:, :, :3]
-        array = array[:, :, ::-1]
+        array = array[:, :, ::-1] #inverte a ordem das camadas RGB
         array = np.expand_dims(array, axis=0)
+        #self.extractROI(array)
         print("Colocando imagem na fila")    
         self.image_queue.put(array)
-        print("Imagem colocada na fila")        
+        print("Imagem colocada na fila")      
+    
+    def extractROI(image):
+        roi = 0
+        return roi
 
 class World(object):
     def __init__(self, carla_world):
@@ -220,6 +234,7 @@ class World(object):
         print("Esquentando o carro-ego ...") #
         for i in range(20):
             self.tick()
+        print("Carro-ego preparado.")
 
     def tick(self):
         #fixed_delta_seconds indica que são 20 frames
@@ -260,9 +275,9 @@ class World(object):
     def config_camera(self):
         print("Configurando câmera 1...")
         camera_bp = self.carla_world.get_blueprint_library().find("sensor.camera.rgb")
-        camera_transform = carla.Transform(carla.Location(x=1.5, z=2.4))
-        camera_bp.set_attribute("image_size_x", str(camera_size_x))
-        camera_bp.set_attribute("image_size_y", str(camera_size_y))
+        camera_transform = carla.Transform(carla.Location(x=0.2, z=1.5))
+        camera_bp.set_attribute("image_size_x", str(CAMERA_SIZE[0]))
+        camera_bp.set_attribute("image_size_y", str(CAMERA_SIZE[1]))
         self.camera_sensor = self.carla_world.spawn_actor(
             camera_bp, camera_transform, attach_to=self.player
         )
@@ -296,7 +311,7 @@ def epsilon_greedy(action, step):
     p = np.random.random(1).squeeze()
     epsilon = max(eps_min, eps_max - (eps_max - eps_min) * step / eps_decay_steps)
     if np.random.rand() < epsilon:
-        return np.random.randint(qtd_acoes)
+        return np.random.randint(QTD_ACOES)
     else:
         return action
 
@@ -309,16 +324,16 @@ def generateNetwork(scope):
     model = models.Sequential()
     model.add(
         layers.Conv2D(
-            filters=64, kernel_size=3, activation="relu", input_shape=(600, 800, 3)
+            filters=64, kernel_size=3, activation="relu", input_shape=(CAMERA_SIZE[1], CAMERA_SIZE[0], 3)
         )
     )  # para usar imagem gray, tem que trocar o shape da imagem na layer. Y, X.
-    model.add(layers.MaxPooling2D((2, 2))) #usa um filtro de max-pool 2x2: camera_size/2
+    model.add(layers.MaxPooling2D((2, 2))) #usa um filtro de max-pool 2x2: CAMERA_SIZE/2
     model.add(layers.Conv2D(32, kernel_size=3, activation="relu"))
     model.add(layers.MaxPooling2D((2, 2)))
     model.add(layers.Conv2D(16, kernel_size=3, activation="relu")) #64
     model.add(layers.Flatten())
     model.add(layers.Dense(8, activation="relu")) #128
-    model.add(layers.Dense(qtd_acoes, activation="softmax"))
+    model.add(layers.Dense(QTD_ACOES, activation="softmax"))
     model.compile(optimizer="sgd", loss="mean_squared_error", metrics=["accuracy"])
     return model
 
@@ -397,24 +412,21 @@ def main():
                 print("=> Passo ", global_step, " - Início ")
                 # Prediz uma ação (com base no que possui treinada) com base na observação - por enquanto, apenas uma imagem de câmera
                 actions = mainQ.predict(obs)
-                # A rede produz um resultado em %. Logo, escolhe a posição do vetor(ação) com maior probabilidade
-                action = np.argmax(
-                    actions
-                )  # neste caso, argmax retorna a posição com maior probabilidade
-                actions_counter[str(action)] += 1 #?
+                # A rede produz um resultado em %. Logo, escolhe a posição do vetor(ação) com maior probabilidade (argmax())
+                action = np.argmax(actions)  # neste caso, argmax retorna a posição com maior probabilidade
+                actions_counter[str(action)] += 1 #soma +1 em um histórico de ações realizadas por episódio
 
                 """ 
-                Por mais que a rede tenha escolhido uma ação mais "adequada"(maior probabilidade), o método da DQN usa a política de ganância, que verifica se deve usar a própria experiência (rede DQN) ou se explora o ambiente com uma nova ação aleatória.
+                Por mais que a rede tenha escolhido uma ação mais "adequada"(maior probabilidade),
+                o método da DQN usa a política de ganância, que verifica se deve usar a própria 
+                experiência (rede DQN) ou se explora o ambiente com uma nova ação aleatória.
                 """
+
                 action = epsilon_greedy(action, global_step)
 
                 # Realiza a ação escolhida e recupera o próximo estado, a recompensa, info e se acabou(se houve colisão).
                 next_obs, reward, done, info = env.step(action)
-                #print("next_obs:", next_obs)
-                #print("done:", done)
-                #print("info:", info)
                 
-
                 # Armazenamento das experiências no buffer de replay
                 exp_buffer.append([obs, action, next_obs, reward, done])
                 print("Terminou o PASSO com recompensa: ", reward, "")
@@ -422,7 +434,7 @@ def main():
                 # Treino da rede principal, após uma qtd de passos, usando as experiências do buffer de replay.
                 if global_step % steps_train == 0 and global_step > start_steps:
                     print("\n-- Atualização da Q-Network %", steps_train, "passos --")
-                    # sample experience
+                    # Retira uma amostra de experiências
                     obs, act, next_obs, reward, done = sample_memories(BATCH_SIZE)
 
                     # valor de probabilidade da ação mais provável
@@ -494,7 +506,7 @@ def main():
 """
 Conexão com o simulador
 """
-world, client = connect(world, client , ip='192.168.1.103')
+world, client = connect(world, client)# , ip='192.168.1.103')
 
 if __name__ == "__main__" and world != None and client != None:
     main()
