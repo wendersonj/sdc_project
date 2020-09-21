@@ -1,9 +1,11 @@
 """
 Créditos do código base da DQN ao autor: ??, 2018
+
+Modelo utilizando Keras
 DQN modificada por Wenderson Souza
 Ambiente preparado por Wenderson Souza, baseado no código base da OpenGymIA
 """
-import tensorflow as tf
+
 from tensorflow.keras import datasets, layers, models
 
 import glob
@@ -35,6 +37,7 @@ from tensorflow.compat.v1 import InteractiveSession
 
 from keras.callbacks import ModelCheckpoint
 from matplotlib import pyplot as plt
+
 '''
 Para consertar o erro CUDNN_STATUS_INTERNAL_ERROR
 '''
@@ -54,16 +57,17 @@ Receber três imagens da câmera por tick (percepção de movimento)
 CAMERA_SIZE = (800, 600)
 QTD_ACOES = 7
 # Variáveis DQN
-epsilon = 0.5
+epsilon = -1 #apenas inicializada
 eps_min = 0.05
 eps_max = 1.0
-eps_decay_steps = 500000
+eps_decay_steps = 50000
+#
 buffer_len = 20000  # limita a quantidade de experiencias. quando encher, retira as ultimas experiencias
 exp_buffer = deque(maxlen=buffer_len)
 QTD_EPISODIOS = 2 #100
 BATCH_SIZE = 32
 learning_rate = 0.001
-discount_factor = 0.97
+discount_factor = 0.9
 # Variáveis de mundo e cliente
 world = None
 client = None
@@ -89,6 +93,7 @@ class Env(object):
         ]
         self.frameObs = None
         self.image_queue = queue.Queue()
+        self.passos_ep = 0
 
         '''
         Ações
@@ -109,6 +114,7 @@ class Env(object):
         print("Reiniciando ambiente...")
         self.reward = 0
         self.done = 0
+        self.passos_ep = 0
         world.restart()
         print("Iniciando componentes do ator...")
         self.player = world.player
@@ -120,22 +126,28 @@ class Env(object):
     def applyReward(self):
         # se houve colisão, negativa em X pontos e termina
         if world.colission_history > 0:
-            self.reward = self.reward - 5
+            self.reward = self.reward - 100
             self.done = 1
             return 
 
+        #velocidade do veiculo
         vel = world.velocAtual()
-
         #não tenho noção de velocidade...
-        if vel > SPEED_LIMIT and vel < 10:
-            print("\nAcima do limite de velocidade de ", SPEED_LIMIT, "km/h. \nVelocidade Atual: ", vel)
-            self.reward = self.reward + 0.02
-        else:
-            self.reward = self.reward + (1 - (vel/SPEED_LIMIT)**(0.4))
+        print("\nVelocidade atual: ", vel, "km/h.")
+        self.reward = self.reward + (1 - (vel/SPEED_LIMIT)**(0.4*vel))
         
-        # se esta perto do objetivo, perde menos pontos
+        '''Se demora muito para se locomover e juntar recompensa, perde do mesmo jeito.
+        O objetivo aqui é fazer o veículo se locomover para acumular recompensa.
+        '''
+        #limite de tempo (passos)
+        if self.passos_ep() >= 1000:
+            self.reward = self.reward - 70
+            self.done = 1
+            return 
+       
         
         '''
+        # se esta perto do objetivo, perde menos pontos
         #não tenho noção de posição / localização
         dist_atual = world.destiny_dist()
         self.reward = self.reward + (dist_atual - world.last_distance) / dist_atual
@@ -152,13 +164,14 @@ class Env(object):
         #distancia do centro da faixa ?
 
     def step(self, action):
+        self.passos_ep = self.passos_ep + 1
         self.info = self.applyAction(action)
         world.tick()  # atualiza o mundo
         '''
         O que acontece se eu der 3 ticks ?  verificar o frame e as imagens recebidas
         -verificar se consigo plotar
         '''
-       #print("Frame recebido (step): ", self.frameObs)
+        #print("Frame recebido (step): ", self.frameObs)
         self.applyReward()
         return self.getObservation(), self.reward, self.done, self.info
 
@@ -176,7 +189,6 @@ class Env(object):
         '''
         deve receber as três imagens e concatenar
         '''
-
         return self.image_queue.get()    
 
     def convertImage(self, image):
@@ -328,9 +340,11 @@ def generateNetwork(scope):
         )
     )  # para usar imagem gray, tem que trocar o shape da imagem na layer. Y, X.
     model.add(layers.MaxPooling2D((2, 2))) #usa um filtro de max-pool 2x2: CAMERA_SIZE/2
-    model.add(layers.Conv2D(32, kernel_size=3, activation="relu"))
+    model.add(layers.Conv2D(64 kernel_size=3, activation="relu"))
     model.add(layers.MaxPooling2D((2, 2)))
-    model.add(layers.Conv2D(16, kernel_size=3, activation="relu")) #64
+    model.add(layers.Conv2D(32, kernel_size=3, activation="relu")) #64
+    model.add(layers.MaxPooling2D((2, 2)))
+    model.add(layers.Conv2D(8, kernel_size=3, activation="relu")) #64
     model.add(layers.Flatten())
     model.add(layers.Dense(8, activation="relu")) #128
     model.add(layers.Dense(QTD_ACOES, activation="softmax"))
@@ -342,11 +356,17 @@ def connect(world, client, ip="localhost"):
         print("Tentando conectar ao servidor Carla...")
         client = carla.Client(ip, 2000)
         client.set_timeout(10.0)
+        print("Conectado com sucesso.")
+        print("Carregando mapa Town05 [1/2] ...")        
+        client.load_world("Town05")
+        sleep(5)
+        print("Carregando mapa Town05 [2/2] ...")        
         carla_world = World(client.get_world())
     except RuntimeError:
         print("Falha na conexão. Verifique-a.")
         return None, None
-    print("Conectado com sucesso.")
+    os.sys("clear")
+    print("Mapa carregado com sucesso !")
     return carla_world, client
 
 ###
@@ -382,9 +402,9 @@ def main():
         #env.reset()
         print("Inicializando DQN...")
 
-        global_step = 0  # passos totais (somatorio dos passos em cada episodio)
-        copy_steps = 100 # a cada x passos irá copiar a main_network para a target_network
         steps_train = 50  # a cada x passos irá treinar a main_network
+        copy_steps = 100 # a cada x passos irá copiar a main_network para a target_network
+        global_step = 0  # passos totais (somatorio dos passos em cada episodio)
         start_steps = 100  # passos inicias. (somente após essa qtd de passo irá treinar começar a rede)
 
         print("Gerando rede DQN principal...")
@@ -470,8 +490,6 @@ def main():
                 passos_ep += 1
                 global_step += 1
                 
-                if passos_ep == 10:
-                    env.done = 1
             print(
                 "=> Fim do Episódio ",
                 episodio,
