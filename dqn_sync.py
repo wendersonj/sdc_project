@@ -7,6 +7,12 @@ Ambiente preparado por Wenderson Souza, baseado no código base da OpenGymIA e c
     documentação do simulador Carla
 '''
 
+'''
+To-do:
+Receber três imagens da câmera por tick (percepção de movimento).
+problemas ao receber 3 imagens... verificar a classe observation
+'''
+
 import glob
 import os
 import sys
@@ -55,12 +61,6 @@ config.gpu_options.allow_growth = True
 session = InteractiveSession(config=config)
 
 
-'''
-To-do:
-Receber três imagens da câmera por tick (percepção de movimento)
-'''
-
-
 # Variáveis Simulacao
 CAMERA_SIZE = (800, 600)
 QTD_ACOES = 7
@@ -89,13 +89,10 @@ filepath='redeCheckpoint.{epoch:02d}-{accuracy:.2f}.hdf5'
 checkpoint1 = ModelCheckpoint(filepath, monitor='accuracy', save_best_only=True, verbose=1, mode='max', save_weights_only=False)
 callbacks_list = [checkpoint1]
 
-reward_ep_summary_writer = tf.summary.create_file_writer()
+#grafico de recompensa por época personalizado
+historico_episodio_summary = tf.summary.create_file_writer()
 
-#colocar no lugar certo::
-with train_summary_writer.as_default():
-    tf.summary.scalar('recompensa', recompensa, step=epoch)
-
-historico = []
+global_training_history = [] #armazena os resultados do fit.
 
 class Env(object):
     def __init__(self, world):
@@ -249,14 +246,14 @@ class Env(object):
         return roi
 
 class Observation(object):
-    def __init__(self, obs, veloc, coord_faixas):
-        self.coord_faixas = coord_faixas
-        self.obs = obs
-        self.veloc = veloc
+    #def __init__(self, obs1, obs2, obs3, veloc, coord_faixas):
+    def __init__(self, img, veloc, coord_faixas):
+        self.img = img
+        self.coord_faixas = coord_faixas #última faixa ?
+        self.veloc = veloc #veloc media entre as 3 obs ?
     
     def calculaCentroFaixa(coord_faixas)
         return None
-
 
 class World(object):
     def __init__(self, carla_world):
@@ -387,11 +384,8 @@ def func_erro(y_true, y_pred):
 def generateNetwork(nome='rede'):
 
     #considerar o cenário de colisão: caso ocorra,  
-    img1 = keras.Input(shape=(CAMERA_SIZE[0],CAMERA_SIZE[1],CAMERA_SIZE[2],), name='img1')
-    img2 = keras.Input(shape=(CAMERA_SIZE[0],CAMERA_SIZE[1],CAMERA_SIZE[2],), name='img2')
-    img3 = keras.Input(shape=(CAMERA_SIZE[0],CAMERA_SIZE[1],CAMERA_SIZE[2],), name='img3')
+    camera = keras.Input(shape=(CAMERA_SIZE[0],CAMERA_SIZE[1],CAMERA_SIZE[2],), name='img1')
     #
-    camera = layers.concatenate([img1, img2, img3]) #concatena, sem processar os 3 frames da camera
     mid= layers.Conv2D(filters=256, kernel_size=3, activation='relu')(camera)
     mid=layers.MaxPooling2D((2,2))(mid) #400,300
     mid=layers.Conv2D(filters=256, kernel_size=3, activation='relu')(mid)
@@ -412,7 +406,7 @@ def generateNetwork(nome='rede'):
     #
     outputs = layers.Dense(QTD_ACOES, activation='softmax')(x)
     #
-    model = keras.Model(inputs=[img1, img2, img3, coord_faixas, velocidade], outputs=outputs, name=nome)
+    model = keras.Model(inputs=[camera, coord_faixas, velocidade], outputs=outputs, name=nome)
     model.compile(optimizer='adam', loss=func_erro, metrics=['accuracy'])
     return model
 
@@ -434,27 +428,6 @@ def connect(world, client, ip='localhost'):
     print('< Mapa carregado com sucesso !')
     return carla_world, client
 
-
-def make_graph(x, y, xlabel='', ylabel='', title='', save_img=False, show_img=False, file_name='graphimg.jpg'):
-    if type(x) is int:
-        xi = list(range(x))
-    else: #array
-        xi = list(range(len(x)))
-        plt.xticks(xi, x)
-    plt.plot(xi, y)
-    plt.xlabel(xlabel)
-    plt.ylabel(ylabel)
-    plt.title(title)
-    if save_img:
-        plt.savefig(file_name)
-    if show_img:
-        plt.show()
-    plt.close(fig)
-
-###
-
-global_training_history = []
-
 def main():
     try:
         print('< Iniciando mundo Carla...')
@@ -474,9 +447,8 @@ def main():
         targetQ = generateNetwork('targetQ')
         print('< Redes geradas.')
 
+        #inicializa variaveis
         action = 0 #ação escolhida
-        y = 0 # 
-
         print('< Iniciando episodios...')
         for episodio in range(QTD_EPISODIOS):
             env.reset() 
@@ -570,7 +542,14 @@ def main():
                 obs = next_obs  # troca a obs
                 passos_ep += 1
                 global_step += 1
-               
+            
+            #colocar no lugar certo::
+            with historico_episodio_summary.as_default():
+                tf.summary.scalar('recompensa', env.reward, step=episodio)
+                tf.summary.scalar('passos', passos_ep, step=episodio)
+                tf.summary.scalar('contador de ações', actions_counter, step=episodio)
+
+
             print(
                 '=> Fim do Episódio ',
                 episodio,
@@ -581,12 +560,6 @@ def main():
                 ' pontos.\n',
             )
            
-            #historico.append([episodio, passos_ep, env.reward, actions_counter])
-            #historico.append([episodio, passos_ep, env.reward, actions_counter])
-
-            #make_graph(x=historico[:][0], y=historico[:][2], ylabel='', title='historico de recompensas', save_img=True, file_name='historico_recompensas.jpg')
-            #make_graph(x=historico[:][0], y=historico[:][1], ylabel='', title='passos por episódio', save_img=True, file_name='passos_por_ep.jpg')
-            #histograma do actions counter
 
     except RuntimeError:
         print('\nRuntimeError. Trace: ')
@@ -598,7 +571,6 @@ def main():
     finally:
         if world is not None:
             world.destroy()
-
 
 '''
 Conexão com o simulador
