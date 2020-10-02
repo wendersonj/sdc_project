@@ -12,24 +12,15 @@ To-do:
 Receber três imagens da câmera por tick (percepção de movimento).
 problemas ao receber 3 imagens... verificar a classe observation
 '''
-
+import io
 import glob
 import os
 import sys
 from time import sleep
 import math
 from random import randrange
-from datetime import datetime
-
-try:
-    sys.path.append(glob.glob('../../carla/dist/carla-0.9.7-py3.5-linux-x86_64.egg')[0])
-    sys.path.append(glob.glob('../../PythonAPI/carla/')[0])
-except IndexError:
-    pass
-
-import carla
 import random
-import time
+#import time
 import numpy as np
 import pdb
 import traceback
@@ -38,19 +29,41 @@ from collections import deque, Counter
 from datetime import datetime
 import queue
 
+import carla
+try:
+    sys.path.append(glob.glob('../../carla/dist/carla-0.9.7-py3.5-linux-x86_64.egg')[0])
+    sys.path.append(glob.glob('../../PythonAPI/carla/')[0])
+except IndexError:
+    pass
+
+
+
+#print('< Num GPUs Available: ', len(tf.config.experimental.list_physical_devices('GPU')))
 
 import tensorflow as tf
-print('Num GPUs Available: ', len(tf.config.experimental.list_physical_devices('GPU')))
+from tensorflow import keras
+from tensorflow import summary
 
 from tensorflow.compat.v1 import ConfigProto
 from tensorflow.compat.v1 import InteractiveSession
-#from tensorflow import summary as tf.summary
-
 
 from tensorflow.keras import datasets, layers, models
 from tensorflow.keras.callbacks import ModelCheckpoint
 from tensorflow.keras.callbacks import TensorBoard
+import matplotlib
 from matplotlib import pyplot as plt
+matplotlib.use('agg')
+
+import time
+
+'''
+inicio = time.time()
+time.sleep(0.1)
+fim = time.time()
+print(fim - inicio)
+exit(0)
+'''
+
 
 '''
 Para consertar o erro CUDNN_STATUS_INTERNAL_ERROR
@@ -58,11 +71,14 @@ Para consertar o erro CUDNN_STATUS_INTERNAL_ERROR
 
 config = ConfigProto()
 config.gpu_options.allow_growth = True
+gpus = tf.config.experimental.list_physical_devices('GPU')
+if gpus is not None:
+    tf.config.experimental.set_memory_growth(gpus[0], True)
 session = InteractiveSession(config=config)
 
 
 # Variáveis Simulacao
-CAMERA_SIZE = (800, 600)
+CAMERA_SIZE = (800, 600, 3)
 QTD_ACOES = 7
 # Variáveis DQN
 epsilon = -1 #apenas inicializada
@@ -72,7 +88,7 @@ eps_decay_steps = 50000
 #
 buffer_len = 20000  # limita a quantidade de experiencias. quando encher, retira as ultimas experiencias
 exp_buffer = deque(maxlen=buffer_len)
-QTD_EPISODIOS = 2 #100
+QTD_EPISODIOS = 20 #100
 BATCH_SIZE = 32
 learning_rate = 0.001
 discount_factor = 0.9
@@ -87,12 +103,69 @@ tensorboard_callback = TensorBoard(log_dir=logdir, histogram_freq=1)
 
 filepath='redeCheckpoint.{epoch:02d}-{accuracy:.2f}.hdf5'
 checkpoint1 = ModelCheckpoint(filepath, monitor='accuracy', save_best_only=True, verbose=1, mode='max', save_weights_only=False)
-callbacks_list = [checkpoint1]
 
 #grafico de recompensa por época personalizado
-historico_episodio_summary = tf.summary.create_file_writer()
+historico_episodio_summary = summary.create_file_writer(logdir+'/historico_ep')
 
 global_training_history = [] #armazena os resultados do fit.
+
+def salvarModeloReward(acc, reward, model):
+    print("> Avaliando recompensa..")
+    #print("acc: ", acc[0])
+    files = glob.glob('/home/wenderson/projeto_sdc/*.hd5f')
+    reward_last_model = reward - 1
+    #print(files)
+    for f in files:
+        if 'reward:' in f:
+            print('file f:', f)
+            reward_last_model = float(f.split('--')[-1].split(':')[-1].split('.')[0])
+            print('last reward :', f)
+    
+    #print('recompensa atual:', reward)
+    if float(reward_last_model) < reward:
+        filepath='redeCheckpoint.'+datetime.now().strftime('%d-%m-%Y--%H:%M:%S')+'--'
+        filepath=filepath+'acc:{:.2f}--reward:.{}--.hd5f'.format(acc[0], reward)
+        model.save_weights(filepath, overwrite=True)
+        print('> Modelo com melhor recompensa re-escrito.')
+    else:
+        print('> Modelo com melhor recompensa ainda é o último escrito.')
+
+def gerarGrafico(labels, acoes_counter):
+    print("< Gerando gráfico...")
+    #https://towardsdatascience.com/exploring-confusion-matrix-evolution-on-tensorboard-e66b39f4ac12
+    figure = plt.figure()
+    ind = np.arange(len(labels)) 
+    plt.bar(ind, acoes_counter, label='Ações')
+
+    plt.ylabel('Qtd. vezes realizada')
+    plt.title('Contador de Ações')
+
+    plt.xticks(ind, rotation = 45, labels=labels)
+
+    plt.tight_layout()
+
+    buf = io.BytesIO()
+    
+    # Use plt.savefig to save the plot to a PNG in memory.
+    #print('salvando imagem')
+    plt.savefig(buf, format='png')
+    #print('imagem salva')
+    # Closing the figure prevents it from being displayed directly inside
+    # the notebook.
+    
+    plt.close(figure)
+    #print('imagem fechada')
+    buf.seek(0)
+    #print("usando o buffer")
+    
+    # Use tf.image.decode_png to convert the PNG buffer
+    # to a TF image. Make sure you use 4 channels.
+    image = tf.image.decode_png(buf.getvalue(), channels=4)
+    
+    # Use tf.expand_dims to add the batch dimension
+    image = tf.expand_dims(image, 0)
+    print('< Gráfico gerado.')
+    return image
 
 class Env(object):
     def __init__(self, world):
@@ -110,7 +183,7 @@ class Env(object):
             'ré-direita',
             'ré-esquerda',
         ]
-        self.frameObs = None
+        #self.frameObs = None
         self.image_queue = queue.Queue() #jackpot: toda vez que ocorre um .get(), ocorre um tick
         self.passos_ep = 0
         self.coord_faixas = []
@@ -156,10 +229,10 @@ class Env(object):
         print('> Velocidade atual: ', vel, 'km/h.')
         #vel <=1: reward += 0.01
         
-        if vel > 5 and vel < SPEED_LIMIT:
-            self.reward = self.reward + 0.5
+        if vel > 3 and vel < SPEED_LIMIT:
+            self.reward = self.reward + 1
         elif vel > SPEED_LIMIT:
-            self.reward = self.reward - 0.3
+            self.reward = self.reward - 1
         #se não for, nao ganha recompensa, mas tb nao perde
 
         #self.reward = self.reward + (1 - (vel/SPEED_LIMIT)**(0.4*vel))
@@ -168,16 +241,25 @@ class Env(object):
         O objetivo aqui é fazer o veículo se locomover para acumular recompensa.
         '''
        
-        if self.coord_faixas not None:
-            self.reward = self.reward + (-(((CAMERA_SIZE[1]/2)-self.coord_faixas[3][1]) ** 4)+1)
+        #if self.coord_faixas not None:
+        #    self.reward = self.reward + (-(((CAMERA_SIZE[1]/2)-self.coord_faixas[3][1]) ** 4)+1)
+
+        #(esq0, esq1, dir0, dir1)
+        if self.coord_faixas is not None:
+            #se o X/2 (metade da tela), está entre as linhas, +1. senão, -1
+            if CAMERA_SIZE[1]/2: 
+                0
+            #  self.reward = self.reward + (-(((CAMERA_SIZE[1]/2)-self.coord_faixas[3][1]) ** 4)+1)
+
+        #se der a mesma quantidade de passos para frente e para trás, perde ponto
+
 
         #limite de tempo (passos)
-        if self.passos_ep >= 1000:
+        if self.passos_ep >= 501: #1000
             self.reward = self.reward - 10
             self.done = 1
             return
 
-        
         '''
         # se esta perto do objetivo, perde menos pontos
         #não tenho noção de posição / localização
@@ -192,15 +274,12 @@ class Env(object):
         
         '''
         
-        #distancia do centro da faixa ?
-
     def step(self, action):
         self.passos_ep = self.passos_ep + 1
         self.info = self.applyAction(action)
         world.tick()  # atualiza o mundo
         '''
-        O que acontece se eu der 3 ticks ?  verificar o frame e as imagens recebidas
-        -verificar se consigo plotar
+        ao dar 3 ticks, são salvas 3 imagens na queue
         '''
         #print('Frame recebido (step): ', self.frameObs)
         self.applyReward()
@@ -217,13 +296,16 @@ class Env(object):
 
     def getObservation(self):
         print('< Esperando imagem ...')
+        
+        return Observation(self.image_queue.get(), veloc = world.velocAtual(), coord_faixas=None)
+        
+        #for i in range(3):
         '''
+        #nao está usando --
         deve receber as três imagens e concatenar
         '''
-        obs = Observation()
-        for i in range(3):
-            obs.append(self.image_queue.get())
-        return obs
+        #    obs.append(self.image_queue.get())
+        #return obs
 
     def convertImage(self, image):
         '''
@@ -236,24 +318,34 @@ class Env(object):
         array = array[:, :, :3]
         array = array[:, :, ::-1] #inverte a ordem das camadas RGB
         array = np.expand_dims(array, axis=0)
-        #self.extractROI(array)
         print('< Colocando imagem na fila')    
         self.image_queue.put(array)
-        print('< Imagem colocada na fila')      
+        print('< Imagem colocada na fila')
     
-    def extractROI(image):
-        roi = 0
-        return roi
-
 class Observation(object):
     #def __init__(self, obs1, obs2, obs3, veloc, coord_faixas):
-    def __init__(self, img, veloc, coord_faixas):
-        self.img = img
-        self.coord_faixas = coord_faixas #última faixa ?
-        self.veloc = veloc #veloc media entre as 3 obs ?
-    
-    def calculaCentroFaixa(coord_faixas)
+    def __init__(self, img, coord_faixas, veloc):
+        if img is not None:
+            self.img1 = img
+        #print(self.img1.shape)
+        if self.img1 is not None and coord_faixas is None:
+            self.coord_faixas = self.calculaCoordFaixa(self.img1) 
+        else: 
+            print('fail coord faixas')
+            self.coord_faixas = None
+        #print(self.coord_faixas.shape)
+        if veloc is not None:
+            self.veloc = np.expand_dims([veloc], axis=0) #veloc media entre as 3 obs ?
+        #print(self.veloc.shape)
+    def calculaCoordFaixa(self, img):
+        #extract roi etc
+        return np.expand_dims([0,0,0,0], axis=0)
+
+    def calculaCentroFaixa(self, coord_faixas):
         return None
+
+    def printShape(self):
+        return '{0}\n{1}\n{2}'.format(self.img1.shape, self.coord_faixas.shape, self.veloc.shape)
 
 class World(object):
     def __init__(self, carla_world):
@@ -287,10 +379,10 @@ class World(object):
         '''
         prepara o carro
         '''
-        print('Esquentando o carro-ego ...') #
+        print('< Esquentando o carro-ego ...') #
         for i in range(20):
             self.tick()
-        print('Carro-ego preparado.')
+        print('< Carro-ego preparado.')
 
     def tick(self):
         #fixed_delta_seconds indica que são 20 frames
@@ -350,7 +442,7 @@ class World(object):
             if actor is not None:
                 actor.destroy()
 
-    def defineDestiny(self,g d):
+    def defineDestiny(self, d):
         self.destiny = d
 
     def destiny_dist(self):
@@ -382,25 +474,23 @@ def func_erro(y_true, y_pred):
     return tf.reduce_mean(squared_difference, axis=-1)  # Note the `axis=-1`
 
 def generateNetwork(nome='rede'):
-
-    #considerar o cenário de colisão: caso ocorra,  
-    camera = keras.Input(shape=(CAMERA_SIZE[0],CAMERA_SIZE[1],CAMERA_SIZE[2],), name='img1')
+    camera = keras.Input(shape=(CAMERA_SIZE[1],CAMERA_SIZE[0],CAMERA_SIZE[2]), name='img1')
     #
-    mid= layers.Conv2D(filters=256, kernel_size=3, activation='relu')(camera)
+    mid= layers.Conv2D(filters=64, kernel_size=3, activation='relu')(camera)
     mid=layers.MaxPooling2D((2,2))(mid) #400,300
-    mid=layers.Conv2D(filters=256, kernel_size=3, activation='relu')(mid)
+    mid=layers.Conv2D(filters=32, kernel_size=3, activation='relu')(mid)
     mid=layers.MaxPooling2D((2,2))(mid) #200,150
-    mid=layers.Conv2D(filters=128, kernel_size=3, activation='relu')(mid)
+    mid=layers.Conv2D(filters=16, kernel_size=3, activation='relu')(mid)
     mid=layers.MaxPooling2D((2,2))(mid) #100,75
-    mid=layers.Conv2D(filters=64, kernel_size=3, activation='relu')(mid)
+    mid=layers.Conv2D(filters=8, kernel_size=3, activation='relu')(mid)
     mid=layers.MaxPooling2D((2,2))(mid) #50,32
     mid=layers.Flatten()(mid)
     dense1 = layers.Dense(32, activation='relu')(mid) #128
     #
-    coord_faixas = keras.Input(shape=(4,), name='coordenadas-faixas-esq.-dir.')
+    coord_faixas = keras.Input(shape=(4), name='coordenadas-faixas-esq.-dir.')
     dense3 = layers.Dense(64, activation='relu')(coord_faixas)
     #
-    velocidade = keras.Input(shape=(1,), name='velocidade')
+    velocidade = keras.Input(shape=(1), name='velocidade')
     #
     x = layers.concatenate([dense1, dense3, velocidade]) #concatena, sem processar
     #
@@ -435,10 +525,10 @@ def main():
         #env.reset()
         print('< Inicializando DQN...')
 
-        steps_train = 5  # a cada x passos irá treinar a main_network #50
-        copy_steps = 1 # a cada x passos irá copiar a main_network para a target_network  #100
+        steps_train = 250  # a cada x passos irá treinar a main_network #50
+        copy_steps = 250 # a cada x passos irá copiar a main_network para a target_network  #100
         global_step = 0  # passos totais (somatorio dos passos em cada episodio)
-        start_steps = 1  # passos inicias. (somente após essa qtd de passo irá treinar começar a rede) #100
+        start_steps = 100  # passos inicias. (somente após essa qtd de passo irá treinar começar a rede) #100
 
         print('< Gerando rede DQN principal...')
         mainQ = generateNetwork('mainQ')
@@ -446,28 +536,27 @@ def main():
         print('< Gerando rede DQN alvo...')
         targetQ = generateNetwork('targetQ')
         print('< Redes geradas.')
-
+        
         #inicializa variaveis
         action = 0 #ação escolhida
         print('< Iniciando episodios...')
         for episodio in range(QTD_EPISODIOS):
             env.reset() 
             
-            print('>> Episodio', episodio, '%')
+            print('>> Episodio', episodio, '<<')
             world.tick()  # atualiza o mundo
             obs = env.getObservation()
             passos_ep = 0  # quantidade de passos realizados em um episodio
-            actions_counter = Counter()
+            actions_counter = np.zeros(shape=(QTD_ACOES), dtype=int)
             episodic_loss = []
 
             while not env.done:
-                print('> Passo ', global_step, ' - Início ')
+                print( '\n> Passo ', env.passos_ep,' (ep ',episodio,'):')
                 # Prediz uma ação (com base no que possui treinada) com base na observação - por enquanto, apenas uma imagem de câmera
-                actions = mainQ.predict(obs)
+                actions = mainQ.predict(x=[obs.img1, obs.coord_faixas, obs.veloc])
                 # A rede produz um resultado em %. Logo, escolhe a posição do vetor(ação) com maior probabilidade (argmax())
                 action = np.argmax(actions)  # neste caso, argmax retorna a posição com maior probabilidade
-                actions_counter[str(action)] += 1 #soma +1 em um histórico de ações realizadas por episódio
-
+                
                 ''' 
                 Por mais que a rede tenha escolhido uma ação mais 'adequada'(maior probabilidade),
                 o método da DQN usa a política de ganância, que verifica se deve usar a própria 
@@ -475,7 +564,8 @@ def main():
                 '''
 
                 action = epsilon_greedy(action, global_step)
-
+                
+                actions_counter[action] += 1 #soma +1 em um histórico de ações realizadas por episódio
                 # Realiza a ação escolhida e recupera o próximo estado, a recompensa, info e se acabou(se houve colisão).
                 next_obs, reward, done, info = env.step(action)
                 
@@ -490,8 +580,7 @@ def main():
                     obs, act, next_obs, reward, done = sample_memories(BATCH_SIZE)
 
                     # valor de probabilidade da ação mais provável
-                    targetValues = targetQ.predict(next_obs.obs[0], next_obs.obs[1], \
-                        next_obs.obs[2], next_obs.veloc, next_obs.coord_faixas)
+                    targetValues = targetQ.predict(x=[next_obs.img1, next_obs.coord_faixas, next_obs.veloc])
                     print('> Valores alvo: ', targetValues)
 
                     bestAction = np.argmax(targetValues)
@@ -514,7 +603,6 @@ def main():
                     )
                     '''
 
-                    #targetValues[0][bestAction] = y ###isso está errado
                     '''
                     now we train the network and calculate loss
                     gradient descent (x=obs e y=recompensa)
@@ -526,9 +614,11 @@ def main():
                     Que, na verdade, é a ação que melhor representa as observações obtidas.
                     ex.: uma imagem de um 2, é como resultado [0,0,1,0,...]
                     '''
-                    training_history = mainQ.fit(x=[obs.obs[0], obs.obs[1], obs.obs[2], obs.veloc, obs.coord_faixas], \ 
-                        y=np.expand_dims(y, axis=-1), batch_size=BATCH_SIZE, epochs=1, \
+                    training_history = mainQ.fit(x=[obs.img1, obs.coord_faixas, obs.veloc], y=np.expand_dims(y, axis=-1), batch_size=BATCH_SIZE, epochs=1, \
                         shuffle=True, callbacks=[checkpoint1, tensorboard_callback])
+                    #avalia recomepnsa e verifica se precisa substituir o modelo
+                    salvarModeloReward(acc=training_history.history['accuracy'], reward=env.reward, model=mainQ) 
+                    
                     episodic_loss.append(training_history)  # historico
                     global_training_history.append(training_history)
                     #print(training_history.history.keys())
@@ -537,18 +627,20 @@ def main():
 
                 if (global_step + 1) % copy_steps == 0 and global_step > start_steps:
                     # Cópia dos pesos da rede principal para a rede alvo.
+                    print('< Copiando pesos da rede principal para a rede alvo.')
                     targetQ.set_weights(mainQ.get_weights())
 
                 obs = next_obs  # troca a obs
                 passos_ep += 1
                 global_step += 1
             
-            #colocar no lugar certo::
+            
             with historico_episodio_summary.as_default():
-                tf.summary.scalar('recompensa', env.reward, step=episodio)
-                tf.summary.scalar('passos', passos_ep, step=episodio)
-                tf.summary.scalar('contador de ações', actions_counter, step=episodio)
-
+                summary.scalar('Recompensa', env.reward, step=episodio)
+                summary.scalar('Passos', passos_ep, step=episodio)
+                #summary.histogram('contador de ações1(histograma)', actions_counter, step=episodio)
+                summary.image('Contador de Ações', gerarGrafico(env.DICT_ACT, actions_counter), step=episodio)
+                print('< Fim da escrita do historico')
 
             print(
                 '=> Fim do Episódio ',
@@ -559,7 +651,7 @@ def main():
                 env.reward,
                 ' pontos.\n',
             )
-           
+        print("\n< Fim do treinamento. Acabaram os episódios.")
 
     except RuntimeError:
         print('\nRuntimeError. Trace: ')
@@ -579,3 +671,5 @@ world, client = connect(world, client , ip='192.168.100.11')
 
 if __name__ == '__main__' and world != None and client != None:
     main()
+
+
