@@ -324,28 +324,35 @@ class Env(object):
     
 class Observation(object):
     #def __init__(self, obs1, obs2, obs3, veloc, coord_faixas):
-    def __init__(self, img, coord_faixas, veloc):
+    #def __init__(self, img, coord_faixas, veloc):
+    def __init__(self, img, veloc):
+        
         if img is not None:
             self.img1 = img
-        #print(self.img1.shape)
+        if veloc is not None:
+            self.veloc = np.expand_dims([veloc], axis=0) #veloc media entre as 3 obs ?
+        '''
+        print(self.img1.shape)
         if self.img1 is not None and coord_faixas is None:
             self.coord_faixas = self.calculaCoordFaixa(self.img1) 
         else: 
             print('fail coord faixas')
             self.coord_faixas = None
-        #print(self.coord_faixas.shape)
-        if veloc is not None:
-            self.veloc = np.expand_dims([veloc], axis=0) #veloc media entre as 3 obs ?
-        #print(self.veloc.shape)
+        print(self.coord_faixas.shape)
+        
     def calculaCoordFaixa(self, img):
         #extract roi etc
         return np.expand_dims([0,0,0,0], axis=0)
 
     def calculaCentroFaixa(self, coord_faixas):
         return None
-
+        
     def printShape(self):
         return '{0}\n{1}\n{2}'.format(self.img1.shape, self.coord_faixas.shape, self.veloc.shape)
+        '''
+
+    def retornaObs():
+        return [img1, veloc]
 
 class World(object):
     def __init__(self, carla_world):
@@ -487,8 +494,8 @@ def generateNetwork(nome='rede'):
     mid=layers.Flatten()(mid)
     dense1 = layers.Dense(32, activation='relu')(mid) #128
     #
-    coord_faixas = keras.Input(shape=(4), name='coordenadas-faixas-esq.-dir.')
-    dense3 = layers.Dense(64, activation='relu')(coord_faixas)
+    #coord_faixas = keras.Input(shape=(4), name='coordenadas-faixas-esq.-dir.')
+    #dense3 = layers.Dense(64, activation='relu')(coord_faixas)
     #
     velocidade = keras.Input(shape=(1), name='velocidade')
     #
@@ -496,7 +503,9 @@ def generateNetwork(nome='rede'):
     #
     outputs = layers.Dense(QTD_ACOES, activation='softmax')(x)
     #
-    model = keras.Model(inputs=[camera, coord_faixas, velocidade], outputs=outputs, name=nome)
+    #model = keras.Model(inputs=[camera, coord_faixas, velocidade], outputs=outputs, name=nome)
+    model = keras.Model(inputs=[camera, velocidade], outputs=outputs, name=nome)
+    #
     model.compile(optimizer='adam', loss=func_erro, metrics=['accuracy'])
     return model
 
@@ -553,7 +562,7 @@ def main():
             while not env.done:
                 print( '\n> Passo ', env.passos_ep,' (ep ',episodio,'):')
                 # Prediz uma ação (com base no que possui treinada) com base na observação - por enquanto, apenas uma imagem de câmera
-                actions = mainQ.predict(x=[obs.img1, obs.coord_faixas, obs.veloc])
+                actions = mainQ.predict(x=obs.retornaObs())
                 # A rede produz um resultado em %. Logo, escolhe a posição do vetor(ação) com maior probabilidade (argmax())
                 action = np.argmax(actions)  # neste caso, argmax retorna a posição com maior probabilidade
                 
@@ -580,7 +589,7 @@ def main():
                     obs, act, next_obs, reward, done = sample_memories(BATCH_SIZE)
 
                     # valor de probabilidade da ação mais provável
-                    targetValues = targetQ.predict(x=[next_obs.img1, next_obs.coord_faixas, next_obs.veloc])
+                    targetValues = targetQ.predict(x=next_obs.retornaObs())
                     print('> Valores alvo: ', targetValues)
 
                     bestAction = np.argmax(targetValues)
@@ -614,7 +623,7 @@ def main():
                     Que, na verdade, é a ação que melhor representa as observações obtidas.
                     ex.: uma imagem de um 2, é como resultado [0,0,1,0,...]
                     '''
-                    training_history = mainQ.fit(x=[obs.img1, obs.coord_faixas, obs.veloc], y=np.expand_dims(y, axis=-1), batch_size=BATCH_SIZE, epochs=1, \
+                    training_history = mainQ.fit(x=next_obs.retornaObs(), y=np.expand_dims(y, axis=-1), batch_size=BATCH_SIZE, epochs=1, \
                         shuffle=True, callbacks=[checkpoint1, tensorboard_callback])
                     #avalia recomepnsa e verifica se precisa substituir o modelo
                     salvarModeloReward(acc=training_history.history['accuracy'], reward=env.reward, model=mainQ) 
