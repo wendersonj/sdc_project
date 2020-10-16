@@ -83,7 +83,7 @@ QTD_ACOES = 7
 epsilon = -1 #apenas inicializada
 eps_min = 0.05
 eps_max = 1.0
-eps_decay_steps = 50000
+eps_decay_steps = 1000 #a cada 2 episodios (500*5)
 #
 buffer_len = 20000  # limita a quantidade de experiencias. quando encher, retira as ultimas experiencias
 exp_buffer = deque(maxlen=buffer_len)
@@ -108,45 +108,59 @@ historico_episodio_summary = summary.create_file_writer(logdir+'/historico_ep')
 
 global_training_history = [] #armazena os resultados do fit.
 
-def salvarModeloReward(acc, reward, model):
+def salvarModeloReward(acc, reward, model, ep):
     print("> Avaliando recompensa..")
     #print("acc: ", acc[0])
-    files = glob.glob('/home/wenderson/projeto_sdc/checkpoints/*.hd5f')
-    reward_last_model = reward - 1
+    files = glob.glob('/home/wenderson/projeto_sdc/checkpoints/*')
+    reward_last_model = -9999
+    model_file = ''
     #print(files)
+    print(files)
     for f in files:
         if 'reward:' in f:
             print('file f:', f)
-            reward_last_model = float(f.split('--')[-1].split(':')[-1].split('.')[0])
-            print('last reward :', f)
+            reward_model = float(f.split('--')[-1].split(':')[-1].split('.')[0])
+            print('last reward :', reward_model)
+            if reward_model > reward_last_model:
+                print('trocou os modelos > melhor recompensa do ultimo modelo:', reward_model)
+                reward_last_model = reward_model
+                model_file = f
+                break
+            
     
     #print('recompensa atual:', reward)
     if float(reward_last_model) < reward:
-        filepath='checkpoints/redeCheckpoint.'+datetime.now().strftime('%d-%m-%Y--%H:%M:%S')+'--'
-        filepath=filepath+'acc:{:.2f}--reward:.{}--.hd5f'.format(acc[0], reward)
-        model.save_weights(filepath, overwrite=True)
+        if model_file:
+            os.remove(model_file)
+        filepath='checkpoints/redeCheckpoint--ep:{}--acc:{:.2f}--reward:{}.hdf5'.format(ep, acc[0], reward)
+        model.save(filepath, overwrite=True)
         print('> Modelo com melhor recompensa re-escrito.')
     else:
         print('> Modelo com melhor recompensa ainda é o último escrito.')
 
-def gerarGrafico(y, x):
+    if ep == QTD_EPISODIOS-1:
+        filepath='checkpoints/LastredeCheckpoint--ep:{}--acc:{:.2f}--reward:{}.hdf5'.format(ep, acc[0], reward)
+        model.save(filepath)
+
+
+def gerarGrafico(y, x, linear=False):
     
     #https://towardsdatascience.com/exploring-confusion-matrix-evolution-on-tensorboard-e66b39f4ac12
     figure = plt.figure()
 
     if(not linear):
         print("< Gerando gráfico de ações...")    
-        ind = np.arange(len(y)) 
-        plt.bar(ind, x, label='Ações')
+        ind = np.arange(len(x)) 
+        plt.bar(ind, y, label='Ações')
 
         plt.ylabel('Qtd. vezes realizada')
         plt.title('Contador de Ações')
 
-        plt.xticks(ind, rotation = 45, labels=y)
+        plt.xticks(ind, rotation = 45, labels=x)
     else:
         print("< Gerando gráfico de velocidade...")
         plt.plot(x, y, color='orange')
-        plt.scatter(x, y, color='blue')
+        #plt.scatter(x, y, color='blue')
         plt.ylabel('Velocidade')
         plt.title('Tacógrafo')
 
@@ -232,17 +246,16 @@ class Env(object):
         self.dist_percorrida = 0.0
         self.ultima_posicao = self.player.get_location() #posicao de spawn
 
-    def applyReward(self):
+    def applyReward(self, vel):
         # se houve colisão, negativa em X pontos e termina
         if world.colission_history > 0:
+            print('> || OCORREU UMA COLISÃO ! || ')
             self.reward = self.reward - 100
             self.done = 1
             return 
 
-        #velocidade do veiculo
-        vel = world.velocAtual()
         #não tenho noção de velocidade...
-        print('> Velocidade atual: ', vel, 'km/h.')
+        print('> Velocidade atual: ', vel, '\tkm/h.')
         #vel <=1: reward += 0.01
         
         if vel > 3 and vel < SPEED_LIMIT:
@@ -251,7 +264,7 @@ class Env(object):
             self.reward = self.reward - 1
 
         #limite de tempo (passos)
-        if self.passos_ep >= 501: #1000
+        if self.passos_ep >= 501: #1001
             self.reward = self.reward - 10
             self.done = 1
             return
@@ -308,19 +321,24 @@ class Env(object):
         self.dist_percorrida += dist_perc     
         
     def step(self, action):
-        self.passos_ep = self.passos_ep + 1
-        self.info = self.applyAction(action)
+        vel = world.velocAtual() #velocidade do veiculo
+        self.passos_ep = self.passos_ep + 1 #atualiza os passos do ep
+        self.tacografo.append(vel) #tacografo
+        self.actions_counter[action] += 1 #soma +1 em um histórico de ações realizadas por episódio
+        #
+        self.info = self.applyAction(action) #guarda o nome da ação realizada
         world.tick()  # atualiza o mundo
         '''
         ao dar 3 ticks, são salvas 3 imagens na queue
         '''
         #print('Frame recebido (step): ', self.frameObs)
+        self.applyReward(vel=vel)
         self.calcularDistPercorrida()
-        self.applyReward()
+        
         return self.getObservation(), self.reward, self.done, self.info
 
     def applyAction(self, action):
-        print('> Ação: ', self.ACTIONS[action] , '(', self.DICT_ACT[action],')') 
+        print('> Ação: \t', self.DICT_ACT[action]) 
         self.player.apply_control(
             carla.VehicleControl(
                 self.ACTIONS[action][0], self.ACTIONS[action][1], reverse=self.ACTIONS[action][2]
@@ -353,7 +371,7 @@ class Env(object):
         array = array[:, :, :3]
         array = array[:, :, ::-1] #inverte a ordem das camadas RGB
         array = np.expand_dims(array, axis=0)
-        print('< Colocando imagem na fila')    
+        print('< Colocando imagem na fila ...')    
         self.image_queue.put(array)
         print('< Imagem colocada na fila')
     
@@ -361,7 +379,7 @@ class Observation(object):
     #def __init__(self, obs1, obs2, obs3, veloc, coord_faixas):
     #def __init__(self, img, coord_faixas, veloc):
     def __init__(self, img, veloc):
-        
+        print('< Criando nova Observation.')
         if img is not None:
             self.img1 = img
         if veloc is not None:
@@ -438,6 +456,7 @@ class World(object):
         self.spawnPlayer()
         self.config_camera()
         self.config_collision_sensor()
+        self.colission_history = 0
         print('< Fim do reinício do mundo.')
 
     def config_carla_world(self):
@@ -460,7 +479,7 @@ class World(object):
 
     def on_collision(self, event):
         self.colission_history += 1
-        print('> || COLISÃO ! || ')
+        
 
     def config_camera(self):
         print('< Configurando câmera 1...')
@@ -570,9 +589,9 @@ def main():
         #env.reset()
         print('< Inicializando DQN...')
 
-        steps_train = 250  # a cada x passos irá treinar a main_network #50
-        copy_steps = 250 # a cada x passos irá copiar a main_network para a target_network  #100
-        global_step = 0  # passos totais (somatorio dos passos em cada episodio)
+        steps_train = 250  # a cada x passos irá treinar a main_network #250
+        copy_steps = 250 # a cada x passos irá copiar a main_network para a target_network  #250
+        global_step = 0  # passos totais (somatorio dos passos em cada episodio) 
         start_steps = 100  # passos inicias. (somente após essa qtd de passo irá treinar começar a rede) #100
 
         print('< Gerando rede DQN principal...')
@@ -610,14 +629,11 @@ def main():
 
                 action = epsilon_greedy(action, global_step)
                 
-                env.actions_counter[action] += 1 #soma +1 em um histórico de ações realizadas por episódio
                 # Realiza a ação escolhida e recupera o próximo estado, a recompensa, info e se acabou(se houve colisão).
                 next_obs, reward, done, info = env.step(action)
-
-                #tacografo
-                env.tacografo.append(world.velocAtual())
                 
                 # Armazenamento das experiências no buffer de replay
+                print('> Guardando experiências buffer de replay...')
                 exp_buffer.append([obs, action, next_obs, reward, done])
                 print('> Terminou o PASSO com recompensa: ', reward, '')
 
@@ -664,9 +680,7 @@ def main():
                     '''
                     training_history = mainQ.fit(x=next_obs.retornaObs(), y=np.expand_dims(y, axis=-1), batch_size=BATCH_SIZE, epochs=1, \
                         shuffle=True, callbacks=[checkpoint1, tensorboard_callback])
-                    #avalia recomepnsa e verifica se precisa substituir o modelo
-                    salvarModeloReward(acc=training_history.history['accuracy'], reward=env.reward, model=mainQ) 
-                    
+                                        
                     episodic_loss.append(training_history)  # historico
                     global_training_history.append(training_history)
                     #print(training_history.history.keys())
@@ -681,16 +695,19 @@ def main():
                 obs = next_obs  # troca a obs
                 passos_ep += 1
                 global_step += 1
-            
-            
+                
             with historico_episodio_summary.as_default():
                 summary.scalar('Recompensa', env.reward, step=episodio)
                 summary.scalar('Passos', passos_ep, step=episodio)
                 summary.scalar('Distância Percorrida', env.dist_percorrida, step=episodio)
                 #summary.histogram('contador de ações1(histograma)', actions_counter, step=episodio)
-                summary.image('Contador de Ações', gerarGrafico(env.DICT_ACT, env.actions_counter), step=episodio)
-                summary.image('Tacógrafo', gerarGrafico([x for x in range(passos_ep)], env.tacografo), step=episodio)
+                summary.image('Contador de Ações', gerarGrafico(x=env.DICT_ACT, y=env.actions_counter), step=episodio)
+                summary.image('Tacógrafo', gerarGrafico(x=[x for x in range(passos_ep)], y=env.tacografo, linear=True), step=episodio)
                 print('< Fim da escrita do historico')
+
+            #avalia recomepnsa e verifica se precisa substituir o modelo
+            if len(global_training_history) > 0:
+                salvarModeloReward(acc=global_training_history[-1].history['accuracy'], reward=env.reward, model=mainQ, ep=episodio) 
 
             print(
                 '=> Fim do Episódio ',
