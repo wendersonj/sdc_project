@@ -5,13 +5,14 @@ Créditos do código base da DQN retirado do livro : 'Hands-On Reinforcement Lea
 DQN modificada por Wenderson Souza para utilizar a framework Keras.
 Ambiente preparado por Wenderson Souza, baseado no código base da OpenGymIA e códigos de exemplos fornecidos pela 
     documentação do simulador Carla
+
+Fontes:
+    https://carla.readthedocs.io/en/latest/python_api/
+    https://carla.readthedocs.io/en/latest/core_concepts/
+    https://pythonprogramming.net/reinforcement-learning-agent-self-driving-autonomous-cars-carla-python/
 '''
 
-'''
-To-do:
-Receber três imagens da câmera por tick (percepção de movimento).
-problemas ao receber 3 imagens... verificar a classe observation
-'''
+
 import io
 import glob
 import os
@@ -35,8 +36,6 @@ try:
     sys.path.append(glob.glob('../../PythonAPI/carla/')[0])
 except IndexError:
     pass
-
-
 
 #print('< Num GPUs Available: ', len(tf.config.experimental.list_physical_devices('GPU')))
 
@@ -78,7 +77,7 @@ session = InteractiveSession(config=config)
 
 # Variáveis Simulacao
 CAMERA_SIZE = (800, 600, 3)
-QTD_ACOES = 7
+QTD_ACOES = 8
 # Variáveis DQN
 epsilon = -1 #apenas inicializada
 eps_min = 0.05
@@ -138,13 +137,12 @@ def salvarModeloReward(acc, reward, model, ep):
     else:
         print('> Modelo com melhor recompensa ainda é o último escrito.')
 
-    if ep == QTD_EPISODIOS-1:
+    if ep == QTD_EPISODIOS-1: #salva o útlimo modelo treinado, antes de acabar o treino
         filepath='checkpoints/LastredeCheckpoint--ep:{}--acc:{:.2f}--reward:{}.hdf5'.format(ep, acc[0], reward)
         model.save(filepath)
 
 
 def gerarGrafico(y, x, linear=False):
-    
     #https://towardsdatascience.com/exploring-confusion-matrix-evolution-on-tensorboard-e66b39f4ac12
     figure = plt.figure()
 
@@ -201,12 +199,14 @@ class Env(object):
             'frente',
             'frente-direita',
             'frente-esquerda',
-            'ré/freio',
+            'freio',
+            'ré',
             'ré-direita',
             'ré-esquerda',
         ]
         #self.frameObs = None
         self.image_queue = queue.Queue() #jackpot: toda vez que ocorre um .get(), ocorre um tick
+        #self.radar_queue = queue.Queue() #jackpot: toda vez que ocorre um .get(), ocorre um tick
         self.passos_ep = 0
         self.actions_counter = None
         self.tacografo = None
@@ -218,16 +218,17 @@ class Env(object):
         Ações
         throttle=aceleração
         '''
-        self.throttle = 0.5
+        self.acelerador = 0.5
         self.ACTIONS = (
-            (0.0, 0.0, False),  # sem acao
-            (self.throttle, 0.0, False),  # frente
-            (self.throttle, -0.5, False),  # frente-direita
-            (self.throttle, 0.5, False),  # frente-esquerda
-            (self.throttle, 0.0, True),  # ré/freio
-            (self.throttle, -0.5, True),  # ré-direita
-            (self.throttle, 0.5, True),  # ré-esquerda
-        )  # 7 acoes
+            (throttle=0.0, steer=0.0, brake=0.0, reverse=False), #sem acao
+            (throttle=self.acelerador, steer=0.0, brake=0.0, reverse=False), #frente
+            (throttle=self.acelerador, steer=-0.5, brake=0.0, reverse=False), #frente-direita
+            (throttle=self.acelerador, steer=0.5, brake=0.0, reverse=False), #frente-esquerda
+            (throttle=0.0, steer=0.0, brake=0.0, reverse=True), #freio
+            (throttle=self.acelerador, steer=0.0, brake=0.0, reverse=True), #ré
+            (throttle=self.acelerador, steer=-0.5, brake=0.0, reverse=True), #ré-direta
+            (throttle=self.acelerador, steer=0.5, brake=0.0, reverse=True), #ré-esquerda
+        )  # 8 acoes
 
     def reset(self):
         print('< Reiniciando ambiente...')
@@ -237,9 +238,10 @@ class Env(object):
         world.restart()
         print('< Iniciando componentes do ator...')
         self.player = world.player
-        print('< is player None? ', self.player)
-        print('< Câmera iniciada')
-        world.camera_sensor.listen(lambda img: self.convertImage(img))
+        print('< Info inicial player (None?): ', self.player)
+        print('< Câmera iniciada.')
+        #world.camera_sensor.listen(lambda img: self.convertImage(img))
+        world.camera_sensor.listen(self.image_queue.put)
         print('< Ator resetado.')
         self.actions_counter = np.zeros(shape=(QTD_ACOES), dtype=int)
         self.tacografo = []
@@ -268,9 +270,7 @@ class Env(object):
             self.reward = self.reward - 10
             self.done = 1
             return
-
-        #se não for, nao ganha recompensa, mas tb nao perde
-
+        
         #self.reward = self.reward + (1 - (vel/SPEED_LIMIT)**(0.4*vel))
         
         '''Se demora muito para se locomover e juntar recompensa, perde do mesmo jeito.
@@ -330,7 +330,7 @@ class Env(object):
         world.tick()  # atualiza o mundo
         '''
         ao dar 3 ticks, são salvas 3 imagens na queue
-        '''
+        ''' 
         #print('Frame recebido (step): ', self.frameObs)
         self.applyReward(vel=vel)
         self.calcularDistPercorrida()
@@ -339,18 +339,15 @@ class Env(object):
 
     def applyAction(self, action):
         print('> Ação: \t', self.DICT_ACT[action]) 
-        self.player.apply_control(
-            carla.VehicleControl(
-                self.ACTIONS[action][0], self.ACTIONS[action][1], reverse=self.ACTIONS[action][2]
-            )
-        )
+        self.player.apply_control(carla.VehicleControl(self.ACTIONS[action]))
         return self.DICT_ACT[action]
 
     def getObservation(self):
         print('< Esperando imagem ...')
         
         #return Observation(self.image_queue.get(), veloc = world.velocAtual(), coord_faixas=None)
-        return Observation(self.image_queue.get(), veloc = world.velocAtual())
+        #return Observation(self.image_queue.get(), veloc = world.velocAtual())
+        return Observation(self.getFila(), veloc = world.velocAtual())
         
         #for i in range(3):
         '''
@@ -366,14 +363,22 @@ class Env(object):
         quando há uma nova imagem disponível pelo sensor camera_sensor.listen
         '''
         # image.convert(cc.Raw)
+        print('< Processado e convertendo imagem.')
         array = np.frombuffer(image.raw_data, dtype=np.dtype('uint8'))
         array = np.reshape(array, (image.height, image.width, 4))
         array = array[:, :, :3]
         array = array[:, :, ::-1] #inverte a ordem das camadas RGB
         array = np.expand_dims(array, axis=0)
-        print('< Colocando imagem na fila ...')    
-        self.image_queue.put(array)
-        print('< Imagem colocada na fila')
+        #print('< Colocando imagem na fila ...')    
+        #self.image_queue.put(array)
+        #print('< Imagem colocada na fila')
+        print('< Imagem convertida. Retornando.')
+        return array
+    
+    def getFila(self):
+        print('< Retirando imagem da fila...')
+        img = self.image_queue.get()
+        return self.convertImage(img)
     
 class Observation(object):
     #def __init__(self, obs1, obs2, obs3, veloc, coord_faixas):
@@ -480,7 +485,6 @@ class World(object):
     def on_collision(self, event):
         self.colission_history += 1
         
-
     def config_camera(self):
         print('< Configurando câmera 1...')
         camera_bp = self.carla_world.get_blueprint_library().find('sensor.camera.rgb')
@@ -520,8 +524,10 @@ def epsilon_greedy(action, step):
     p = np.random.random(1).squeeze()
     epsilon = max(eps_min, eps_max - (eps_max - eps_min) * step / eps_decay_steps)
     if np.random.rand() < epsilon:
+        print('< Ação aleatória.')
         return np.random.randint(QTD_ACOES)
     else:
+        print('< Ação predita/prevista.')
         return action
 
 def sample_memories(BATCH_SIZE):
@@ -576,7 +582,7 @@ def connect(world, client, ip='localhost'):
         print('< Carregando mapa ...')        
         carla_world = World(client.get_world())
     except RuntimeError:
-        print('Falha na conexão. Verifique-a.')
+        print('<< Falha na conexão. Verifique-a.')
         return None, None
     os.system('clear')
     print('< Mapa carregado com sucesso !')
@@ -588,6 +594,9 @@ def main():
         env = Env(world)
         #env.reset()
         print('< Inicializando DQN...')
+
+        media_recompensa = 0
+        total_recompensa = 0
 
         steps_train = 250  # a cada x passos irá treinar a main_network #250
         copy_steps = 250 # a cada x passos irá copiar a main_network para a target_network  #250
