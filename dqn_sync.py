@@ -45,6 +45,7 @@ from tensorflow import summary
 
 from tensorflow.compat.v1 import ConfigProto
 from tensorflow.compat.v1 import InteractiveSession
+from statistics import mean
 
 from tensorflow.keras import datasets, layers, models
 from tensorflow.keras.callbacks import ModelCheckpoint
@@ -74,7 +75,6 @@ if gpus is not None:
     tf.config.experimental.set_memory_growth(gpus[0], True)
 session = InteractiveSession(config=config)
 
-
 # Variáveis Simulacao
 CAMERA_SIZE = (800, 600, 3)
 QTD_ACOES = 8
@@ -86,7 +86,7 @@ eps_decay_steps = 1000 #a cada 2 episodios (500*5)
 #
 buffer_len = 20000  # limita a quantidade de experiencias. quando encher, retira as ultimas experiencias
 exp_buffer = deque(maxlen=buffer_len)
-QTD_EPISODIOS = 25 #100
+QTD_EPISODIOS = 5 #100
 BATCH_SIZE = 32
 learning_rate = 0.001
 discount_factor = 0.9
@@ -94,6 +94,10 @@ discount_factor = 0.9
 world = None
 client = None
 SPEED_LIMIT = 40
+MAX_PASSOS = 10
+
+#
+historico_recompensa=[]
 
 # Define the Keras TensorBoard callback.
 logdir='logs/' + datetime.now().strftime('%d-%m-%Y--%H:%M:%S')
@@ -103,7 +107,9 @@ filepath='checkpoints/redeCheckpoint.{epoch:02d}-{accuracy:.2f}.hdf5'
 checkpoint1 = ModelCheckpoint(filepath, monitor='accuracy', save_best_only=True, verbose=1, mode='max', save_weights_only=False)
 
 #grafico de recompensa por época personalizado
-historico_episodio_summary = summary.create_file_writer(logdir+'/historico_ep')
+log1 = summary.create_file_writer(logdir+'/historico_ep')
+log2 = summary.create_file_writer(logdir+'/historico_ep/recomp_media')
+
 
 global_training_history = [] #armazena os resultados do fit.
 
@@ -140,7 +146,6 @@ def salvarModeloReward(acc, reward, model, ep):
     if ep == QTD_EPISODIOS-1: #salva o útlimo modelo treinado, antes de acabar o treino
         filepath='checkpoints/LastredeCheckpoint--ep:{}--acc:{:.2f}--reward:{}.hdf5'.format(ep, acc[0], reward)
         model.save(filepath)
-
 
 def gerarGrafico(y, x, linear=False):
     #https://towardsdatascience.com/exploring-confusion-matrix-evolution-on-tensorboard-e66b39f4ac12
@@ -181,9 +186,9 @@ def gerarGrafico(y, x, linear=False):
     # Use tf.image.decode_png to convert the PNG buffer
     # to a TF image. Make sure you use 4 channels.
     image = tf.image.decode_png(buf.getvalue(), channels=4)
-    
     # Use tf.expand_dims to add the batch dimension
     image = tf.expand_dims(image, 0)
+
     print('< Gráfico gerado.')
     return image
 
@@ -197,12 +202,12 @@ class Env(object):
         self.DICT_ACT = [
             'sem acao',
             'frente',
-            'frente-direita',
             'frente-esquerda',
+            'frente-direita',
             'freio',
             'ré',
-            'ré-direita',
             'ré-esquerda',
+            'ré-direita',
         ]
         #self.frameObs = None
         self.image_queue = queue.Queue() #jackpot: toda vez que ocorre um .get(), ocorre um tick
@@ -212,23 +217,24 @@ class Env(object):
         self.tacografo = None
         self.dist_percorrida = None
         #self.coord_faixas = []
-        self.ultima_posicao = None
+        self.ultima_posicao = None #sem uso ?!
 
         '''
         Ações
         throttle=aceleração
         '''
         self.acelerador = 0.5
-        self.ACTIONS = (
-            (throttle=0.0, steer=0.0, brake=0.0, reverse=False), #sem acao
-            (throttle=self.acelerador, steer=0.0, brake=0.0, reverse=False), #frente
-            (throttle=self.acelerador, steer=-0.5, brake=0.0, reverse=False), #frente-direita
-            (throttle=self.acelerador, steer=0.5, brake=0.0, reverse=False), #frente-esquerda
-            (throttle=0.0, steer=0.0, brake=0.0, reverse=True), #freio
-            (throttle=self.acelerador, steer=0.0, brake=0.0, reverse=True), #ré
-            (throttle=self.acelerador, steer=-0.5, brake=0.0, reverse=True), #ré-direta
-            (throttle=self.acelerador, steer=0.5, brake=0.0, reverse=True), #ré-esquerda
-        )  # 8 acoes
+        self.ACTIONS = [
+            #(trottle=0.0, steer=0.0, brake=0.0, hand_brake=False, reverse=False)
+            (0.0, 0.0, 0.0, False, False), #sem acao
+            (self.acelerador, 0.0, 0.0, False, False), #frente
+            (self.acelerador, -0.5, 0.0, False, False), #frente-esquerda
+            (self.acelerador, 0.5, 0.0, False, False), #frente-direita
+            (0.0, 0.0, 1.0, False, False), #freio
+            (self.acelerador, 0.0, 0.0, False,True), #ré
+            (self.acelerador, -0.5, 0.0, False, True), #ré-esquerda
+            (self.acelerador, 0.5, 0.0, False, True), #ré-direita
+        ]  # 8 acoes
 
     def reset(self):
         print('< Reiniciando ambiente...')
@@ -266,7 +272,7 @@ class Env(object):
             self.reward = self.reward - 1
 
         #limite de tempo (passos)
-        if self.passos_ep >= 501: #1001
+        if self.passos_ep >= MAX_PASSOS: #1001
             self.reward = self.reward - 10
             self.done = 1
             return
@@ -338,8 +344,9 @@ class Env(object):
         return self.getObservation(), self.reward, self.done, self.info
 
     def applyAction(self, action):
-        print('> Ação: \t', self.DICT_ACT[action]) 
-        self.player.apply_control(carla.VehicleControl(self.ACTIONS[action]))
+        print('> Ação: \t', self.DICT_ACT[action], '\t', self.ACTIONS[action])
+        
+        self.player.apply_control(carla.VehicleControl(*(self.ACTIONS[action]))) #* é para fazer o unpack da tuple para parametros
         return self.DICT_ACT[action]
 
     def getObservation(self):
@@ -435,9 +442,12 @@ class World(object):
             blueprint.set_attribute('color', color)
         # Spawn the player.
         print('< Convocando carro-EGO...')
-        spawn_point = (self.carla_world.get_map().get_spawn_points())[0]
+        
         while(self.player == None):
+            print("< Procurando ponto de spawn para o veículo...")
+            spawn_point = random.choice((self.carla_world.get_map().get_spawn_points()))
             self.player = self.carla_world.try_spawn_actor(blueprint, spawn_point)
+            
         print('< Carro-EGO convocado no mapa')
         # para nao comecar as ações sem ter iniciado adequadamente
 
@@ -459,6 +469,7 @@ class World(object):
         self.destroy()
         self.config_carla_world()
         self.spawnPlayer()
+        
         self.config_camera()
         self.config_collision_sensor()
         self.colission_history = 0
@@ -614,9 +625,15 @@ def main():
         action = 0 #ação escolhida
         print('< Iniciando episodios...')
         for episodio in range(QTD_EPISODIOS):
-            env.reset() 
+            env.reset()
+            
             
             print('>> Episodio', episodio, '<<')
+            print('< Iniciando gravação.')
+            #client.start_recorder("/logs/gravacao_ep_{0}.log".format(episodio), True)
+            client.start_recorder("/home/wenderson/projeto_sdc/recording01.log")
+
+
             world.tick()  # atualiza o mundo
             obs = env.getObservation()
             passos_ep = 0  # quantidade de passos realizados em um episodio
@@ -705,14 +722,19 @@ def main():
                 passos_ep += 1
                 global_step += 1
                 
-            with historico_episodio_summary.as_default():
-                summary.scalar('Recompensa', env.reward, step=episodio)
-                summary.scalar('Passos', passos_ep, step=episodio)
+            historico_recompensa.append(env.reward)
+            with log1.as_default():
+                summary.scalar('Passos sem colisão', passos_ep, step=episodio)
+                summary.scalar('Recompensa', historico_recompensa[-1], step=episodio)
                 summary.scalar('Distância Percorrida', env.dist_percorrida, step=episodio)
-                #summary.histogram('contador de ações1(histograma)', actions_counter, step=episodio)
                 summary.image('Contador de Ações', gerarGrafico(x=env.DICT_ACT, y=env.actions_counter), step=episodio)
                 summary.image('Tacógrafo', gerarGrafico(x=[x for x in range(passos_ep)], y=env.tacografo, linear=True), step=episodio)
-                print('< Fim da escrita do historico')
+                summary.image('Última imagem do episódio', obs.img1,  step=episodio)
+            with log2.as_default():
+                summary.scalar('Recompensa', mean(historico_recompensa), step=episodio) #recompensa média
+                
+
+            print('< Fim da escrita do historico')
 
             #avalia recomepnsa e verifica se precisa substituir o modelo
             if len(global_training_history) > 0:
@@ -727,6 +749,12 @@ def main():
                 env.reward,
                 ' pontos.\n',
             )
+
+            print('< Finalizando a gravação atual...')
+            client.stop_recorder()
+            print('< Fim da gravação atual.')
+
+
         print("\n< Fim do treinamento. Acabaram os episódios.")
 
     except RuntimeError:
@@ -737,9 +765,13 @@ def main():
         traceback.print_exc()
         pass
     finally:
+        print('< Finalizando o programa...')
+        print('< Parando gravação.')
+        client.stop_recorder()
         if world is not None:
             world.destroy()
-
+        print('< \t Programa finalizado.')
+        
 '''
 Conexão com o simulador
 '''
